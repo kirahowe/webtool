@@ -1,0 +1,16 @@
+{
+  "snapshot_dir": "/Users/kira/Library/Application Support/webtool/snapshots",
+  "fetch": {
+    "timeout_seconds": 20,
+    "max_body_bytes": 5000000,
+    "max_text_chars": 20000,
+    "max_snapshot_bytes": 2000000000,
+    "max_read_memory_bytes": 536870912,
+    "extract_sandbox": "required"
+  },
+  "search": {
+    "backend": "brave",
+    "api_key_command": ["security", "find-generic-password", "-s", "relay-brave", "-w"],
+    "timeout_seconds": 20
+  }
+}
