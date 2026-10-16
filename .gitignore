@@ -1,0 +1,6 @@
+/bin/
+/webtool
+*.test
+*.prof
+coverage.out
+**/testdata/rapid/
