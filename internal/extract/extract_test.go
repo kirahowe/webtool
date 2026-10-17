@@ -211,9 +211,9 @@ func TestParentMemoryBounded(t *testing.T) {
 		}
 		// What is read back is at most about 3x the body. Reading it and
 		// decoding the Page peaks near five times that: the decoder
-		// doubles its buffer as the output arrives, holding the old and
-		// the new for a moment, beside the decoded strings. Invalid
-		// UTF-8 under the race detector peaks at about 4.6 times.
+		// grows its buffer as the output arrives, holding the old and
+		// the new at once, beside the decoded strings. Invalid UTF-8
+		// peaks at about 4.8 times, with or without the race detector.
 		readBack := 3*len(body) + 16*r.TextChars
 		if grew := int64(peak.Load()) - int64(before.HeapInuse); grew > int64(5*readBack)+16<<20 {
 			t.Errorf("%s: the parent's heap peaked %d MB above where it began, for a %d MB body", name, grew>>20, len(body)>>20)
@@ -233,10 +233,21 @@ func TestReadBackMargin(t *testing.T) {
 		"newlines": "<title>" + ctl + "</title><pre>" + strings.Repeat("\n", 100_000),
 		"controls": "<title>" + ctl + "</title><p>" + strings.Repeat("\x01", 100_000),
 		"plain":    strings.Repeat("\xff\x01", 50_000),
+		// Separators Compact keeps, which JSON may escape, after the
+		// costliest byte there is.
+		"vt":      "<p>a" + strings.Repeat("\v", 100_000) + "b</p>",
+		"ffvt":    "<p>" + strings.Repeat("\xff\v", 50_000),
+		"ls":      "<p>" + strings.Repeat("\u2028", 50_000),
+		"ffls":    "<p>" + strings.Repeat("\xff\u2028", 50_000),
+		"ffps":    "<p>" + strings.Repeat("\xff\u2029", 50_000),
+		"ffnel":   "<p>" + strings.Repeat("\xff\u0085", 50_000),
+		"ffbr":    "<p>" + strings.Repeat("\xff<br>", 50_000),
+		"ffnl":    "<pre>" + strings.Repeat("\xff\n", 50_000),
+		"plainvt": strings.Repeat("\xff\v", 50_000),
 	} {
 		for _, textChars := range []int{1, 20_000, len(body)} {
 			mt := "text/html"
-			if name == "plain" {
+			if name == "plain" || name == "plainvt" {
 				mt = "text/plain"
 			}
 			header := fmt.Sprintf(`{"media_type":%q,"base":"","limit":%d,"text_chars":%d,"memory":%d,"body_bytes":%d}`+"\n",
@@ -248,6 +259,27 @@ func TestReadBackMargin(t *testing.T) {
 			if limit := readBackCap(len(body), textChars); int64(out.Len())*4/3 > limit {
 				t.Errorf("%s, %d chars: wrote %d bytes, cap %d", name, textChars, out.Len(), limit)
 			}
+		}
+	}
+}
+
+// The reviewer's page of vertical tabs reads through the child. Kept as
+// themselves they came back six bytes each, past the read-back cap, and
+// the page was refused as unreadable.
+func TestVerticalTabsReadBack(t *testing.T) {
+	for _, body := range []string{
+		"<p>a" + strings.Repeat("\v", 100_000) + "b</p>",
+		"<p>" + strings.Repeat("\xff\v", 50_000),
+		strings.Repeat("\xff\v", 50_000),
+	} {
+		mt := "text/html"
+		if !strings.HasPrefix(body, "<") {
+			mt = "text/plain"
+		}
+		r := runner(DefaultMemory)
+		r.TextChars, r.BodyBytes = 20_000, len(body)
+		if _, err := r.Extract(context.Background(), []byte(body), mt, nil, len(body)); err != nil {
+			t.Errorf("%.12q: %v", body, err)
 		}
 	}
 }

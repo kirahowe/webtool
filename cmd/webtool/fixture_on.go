@@ -17,13 +17,12 @@ import (
 )
 
 // checkFixture reads the fixture settings: fetch.fixture_origin must be
-// a loopback address and port, and the fixture search backend needs an
-// absolute results_file.
+// an address and port (fetch.New refuses one that is not loopback), and
+// the fixture search backend needs an absolute results_file.
 func checkFixture(c Config) error {
 	if o := c.Fetch.FixtureOrigin; o != "" {
-		ap, err := netip.ParseAddrPort(o)
-		if err != nil || !ap.Addr().Unmap().IsLoopback() || ap.Addr().Zone() != "" || ap.Port() == 0 {
-			return fmt.Errorf("fixture_origin %q must be a loopback address and port, such as 127.0.0.1:8123", o)
+		if _, err := netip.ParseAddrPort(o); err != nil {
+			return fmt.Errorf("fixture_origin %q must be an address and port, such as 127.0.0.1:8123", o)
 		}
 	}
 	switch {

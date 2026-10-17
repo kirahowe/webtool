@@ -31,11 +31,14 @@ func (p Page) Compact(textChars int) Page {
 		switch {
 		case c == Break || c == '\n' || c >= 0x202A && c <= 0x202E || c >= 0x2066 && c <= 0x2069:
 			return c
-		case c == '\v' || c == 0x85 || c == 0x2028 || c == 0x2029:
-			// Separators Segments reads as breaks.
+		case c == 0x85 || c == 0x2028 || c == 0x2029:
+			// Separators Segments reads as breaks. Each costs JSON no
+			// more than twice its own bytes. A vertical tab would cost
+			// six times, as \u000b, and so reads as a space below.
 			return c
 		case unicode.IsSpace(c):
-			// Any other space, a lone CR or a form feed: a space, as
+			// Any other space, a vertical tab, a lone CR or a form
+			// feed: a space, as
 			// Normalise reads it, so the words either side stay apart.
 			return ' '
 		case Invisible(c):

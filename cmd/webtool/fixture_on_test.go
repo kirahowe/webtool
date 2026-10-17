@@ -14,7 +14,6 @@ import (
 
 func TestFixtureSettings(t *testing.T) {
 	for _, bad := range []string{
-		`{"snapshot_dir": "SNAPSHOTS", "fetch": {"fixture_origin": "10.0.0.1:80"}}`,
 		`{"snapshot_dir": "SNAPSHOTS", "fetch": {"fixture_origin": "localhost:8123"}}`,
 		`{"snapshot_dir": "SNAPSHOTS", "fetch": {"fixture_origin": "127.0.0.1"}}`,
 		`{"snapshot_dir": "SNAPSHOTS", "search": {"backend": "fixture"}}`,
@@ -24,6 +23,13 @@ func TestFixtureSettings(t *testing.T) {
 		if _, err := loadConfig(writeConfig(t, bad)); err == nil {
 			t.Errorf("%s accepted", bad)
 		}
+	}
+	// A parsed origin that is not loopback stops fetch and check with
+	// the reason, before anything is fetched.
+	cfg := writeConfig(t, `{"snapshot_dir": "SNAPSHOTS", "fetch": {"fixture_origin": "10.0.0.1:80", "extract_sandbox": "off"}}`)
+	out, errOut, code := exec(newApp(), []string{"--config", cfg, "fetch"}, call(`{"url": "http://10.0.0.1/"}`))
+	if code != 1 || out != "" || !strings.Contains(errOut, "fixture_origin 10.0.0.1:80 must be a loopback address") {
+		t.Fatalf("exit %d, %q, %q", code, out, errOut)
 	}
 }
 

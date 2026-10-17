@@ -395,10 +395,10 @@ image, a form control, a frame, SVG or MathML), around anything not read
 (a script, a style, a template), and in place of hidden text, so no quote
 runs across any of them. Bidi controls in the text break it too,
 paired as the Unicode bidi algorithm pairs them, and what lies inside them
-is not matched. A vertical tab, NEL and the Unicode line and paragraph
-separators break it as well, since none of them is a space in HTML. NEL
-and the paragraph separator also end a paragraph, and so every bidi
-control open before them. Link targets, image descriptions and the marks fetch adds
+is not matched. NEL and the Unicode line and paragraph separators break
+it as well, since none of them is a space in HTML. NEL and the paragraph
+separator also end a paragraph, and so every bidi control open before
+them. Link targets, image descriptions and the marks fetch adds
 for the agent are not part of the visible text. The cost is that a quote in
 richly styled text, or across one of those breaks, is not found.
 

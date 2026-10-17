@@ -14,7 +14,7 @@ func fixtureOrigin(o netip.AddrPort) (netip.AddrPort, error) {
 		return netip.AddrPort{}, nil
 	}
 	if !o.Addr().Unmap().IsLoopback() || o.Addr().Zone() != "" || o.Port() == 0 {
-		return netip.AddrPort{}, fmt.Errorf("the fixture origin %s is not a loopback address with a port", o)
+		return netip.AddrPort{}, fmt.Errorf("fixture_origin %s must be a loopback address and port, such as 127.0.0.1:8123", o)
 	}
 	return netip.AddrPortFrom(o.Addr().Unmap(), o.Port()), nil
 }

@@ -47,8 +47,7 @@ func Find(normalisedText, quote string) bool {
 }
 
 // Segments splits visible text into the runs a quote may lie in: it breaks
-// at every Break and at a vertical tab, NEL, or line or paragraph
-// separator, and leaves out text inside a bidi embedding, override or
+// at every Break and at NEL or a line or paragraph separator, and leaves out text inside a bidi embedding, override or
 // isolate, since that text may be drawn in another order than written.
 // Embeddings and overrides (LRE, RLE, LRO, RLO) end at their PDF and
 // isolates (LRI, RLI, FSI) at their PDI, as the Unicode bidi algorithm
@@ -70,10 +69,9 @@ func Segments(visible string) []string {
 	var isolates []int
 	for _, r := range visible {
 		switch {
-		case r == Break || r == '\v' || r == 0x2028:
-			// A vertical tab or line separator is no space in HTML, and a
-			// browser may draw nothing for it, so a quote never runs
-			// across one.
+		case r == Break || r == 0x2028:
+			// A line separator is no space in HTML, and a browser may
+			// draw nothing for it, so a quote never runs across one.
 			flush()
 		case r >= 0x202A && r <= 0x202E && r != 0x202C:
 			flush()

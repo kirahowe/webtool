@@ -839,12 +839,13 @@ func TestCompactKeepsWordsApart(t *testing.T) {
 	}
 }
 
-// A vertical tab, NEL, and the line and paragraph separators are breaks:
-// no quote runs across one, in the page's text or its title. NEL and the
-// paragraph separator end the paragraph, so a bidi override before them
-// does not hide the text after; the others do not.
+// NEL and the line and paragraph separators are breaks: no quote runs
+// across one, in the page's text or its title. NEL and the paragraph
+// separator end the paragraph, so a bidi override before them does not
+// hide the text after; the line separator does not. A vertical tab reads
+// as a space.
 func TestSeparatorsBreak(t *testing.T) {
-	for _, sep := range []string{"\v", "\u0085", "\u2028", "\u2029"} {
+	for _, sep := range []string{"\u0085", "\u2028", "\u2029"} {
 		p := Read(context.Background(), []byte("<p>foo"+sep+"bar</p>"), "text/html", nil, 1000, 1000)
 		if FindIn(Segments(p.Visible), "foo bar") {
 			t.Errorf("%q: a quote ran across it in %q", sep, p.Visible)
@@ -855,9 +856,16 @@ func TestSeparatorsBreak(t *testing.T) {
 			t.Errorf("%q: after an override, found %v in %q", sep, got, p.Visible)
 		}
 	}
-	for _, sep := range []string{"\v", "\u0085", "\u2028", "\u2029"} {
+	for _, sep := range []string{"\u0085", "\u2028", "\u2029"} {
 		if FindIn(Segments("foo"+sep+"bar"), "foo bar") {
 			t.Errorf("title %q: a quote ran across it", sep)
+		}
+	}
+	for _, visible := range []string{
+		Read(context.Background(), []byte("<p>foo\vbar</p>"), "text/html", nil, 1000, 1000).Visible, "foo\vbar",
+	} {
+		if !FindIn(Segments(visible), "foo bar") {
+			t.Errorf("%q: a vertical tab did not read as a space", visible)
 		}
 	}
 }

@@ -186,7 +186,8 @@ const maxBaseBytes = 32 << 10
 // What the parent holds is bounded: the Page it reads back has its agent
 // text cut at TextChars, and its visible text (needed whole to check
 // quotes) stripped of the characters quote matching ignores, so it is no
-// more than about twice the body. Output past that is refused, not read.
+// more than about three times the body (see readBackCap, which allows
+// four). Output past the cap is refused, not read.
 func (r Runner) Extract(ctx context.Context, body []byte, mediaType string, base *url.URL, limit int) (text.Page, error) {
 	b := ""
 	if base != nil {
