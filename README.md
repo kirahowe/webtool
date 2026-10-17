@@ -14,9 +14,31 @@ that is not plainly on the public internet.
 
 ```sh
 make build    # bin/webtool
-make test     # gofmt, go vet, and the tests with the race detector
+make fixture  # bin/webtool-fixture, for tests only
+make test     # gofmt, go vet, and both builds' tests with the race detector
 make update   # update dependencies, then test
 ```
+
+### The fixture build
+
+`make fixture` builds webtool with the `fixture` build tag, for relay's
+red-team corpus, which serves attack pages from a local server. This build
+may fetch from one loopback origin, named in the config as
+`"fetch": {"fixture_origin": "127.0.0.1:8123"}`. Only that address and
+port are let through. Every other rule still applies, to the first URL
+and to each redirect, so a redirect from a fixture page into the tailnet
+or a private range is refused as it would be in the release build. A
+host name never reaches the origin, even one that resolves to it.
+
+Its search reads results from a file instead of calling Brave:
+`"search": {"backend": "fixture", "results_file": "/abs/results.json"}`.
+The file is a JSON array of objects with `title`, `url` and `snippet`,
+and every query gets the first `count` of them.
+
+The release build has none of this. It refuses a config that sets
+`fixture_origin`, `results_file` or the fixture backend, and its fetcher
+cannot be given an origin. Never give relay's real tools the fixture
+binary.
 
 ## Running
 

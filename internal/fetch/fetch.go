@@ -56,6 +56,10 @@ type Config struct {
 	Extract Extractor
 	// ExtractMemory is the memory a child reading a page may use.
 	ExtractMemory int64
+	// FixtureOrigin is the one loopback address and port the fixture
+	// build may fetch from, for a local server of test pages. New
+	// refuses it in any other build.
+	FixtureOrigin netip.AddrPort
 }
 
 // Extractor reads a body, decoded to UTF-8, into a Page. It returns
@@ -107,7 +111,8 @@ type Fetcher struct {
 
 // New builds the fetcher production uses: guard's rules with this
 // machine's own networks refused, the system resolver, no proxy, and no
-// way to allow anything more.
+// way to allow anything more. The fixture build alone may allow one
+// loopback origin.
 func New(cfg Config) (*Fetcher, error) {
 	if cfg.Timeout <= 0 || cfg.MaxBodyBytes <= 0 || cfg.SnapshotDir == "" || cfg.MaxSnapshotBytes <= 0 {
 		return nil, errors.New("fetch needs a timeout, a body limit, a snapshot directory and a limit on it")
@@ -122,9 +127,13 @@ func New(cfg Config) (*Fetcher, error) {
 	if cfg.Extract == nil {
 		return nil, errors.New("fetch needs a way to read pages (Config.Extract)")
 	}
+	origin, err := fixtureOrigin(cfg.FixtureOrigin)
+	if err != nil {
+		return nil, err
+	}
 	f := &Fetcher{
 		cfg:    cfg,
-		policy: guard.Policy{Local: local},
+		policy: guard.Policy{Local: local, Origin: origin},
 		lookup: func(ctx context.Context, host string) ([]netip.Addr, error) {
 			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 		},
@@ -197,29 +206,32 @@ func (f *Fetcher) dial(ctx context.Context, _, address string) (net.Conn, error)
 	if err != nil {
 		return nil, &guard.Refusal{Reason: "bad address " + address}
 	}
-	if err := f.policy.CheckPort(port); err != nil {
-		return nil, err
-	}
 	pn, err := strconv.ParseUint(port, 10, 16)
 	if err != nil {
 		return nil, &guard.Refusal{Reason: "bad port " + port}
 	}
 	var addrs []netip.Addr
 	if a, err := netip.ParseAddr(host); err == nil {
+		if err := f.policy.CheckAddrPort(a, port); err != nil {
+			return nil, err
+		}
 		addrs = []netip.Addr{a}
 	} else {
+		if err := f.policy.CheckPort(port); err != nil {
+			return nil, err
+		}
 		if _, err := guard.CheckHost(host); err != nil {
 			return nil, err
 		}
 		if addrs, err = f.lookup(ctx, host); err != nil || len(addrs) == 0 {
 			return nil, resolveError(host)
 		}
-	}
-	// One refused address refuses the host: a name that answers with a
-	// public address and a private one is trying something.
-	for _, a := range addrs {
-		if err := f.policy.CheckAddr(a); err != nil {
-			return nil, prefixed(host+" resolves to a refused address: ", err)
+		// One refused address refuses the host: a name that answers
+		// with a public address and a private one is trying something.
+		for _, a := range addrs {
+			if err := f.policy.CheckAddr(a); err != nil {
+				return nil, prefixed(host+" resolves to a refused address: ", err)
+			}
 		}
 	}
 	d := net.Dialer{Timeout: 10 * time.Second, Control: f.control}
@@ -241,10 +253,7 @@ func (f *Fetcher) control(_, address string, _ syscall.RawConn) error {
 	if err != nil {
 		return &guard.Refusal{Reason: "bad address " + address}
 	}
-	if err := f.policy.CheckPort(strconv.Itoa(int(ap.Port()))); err != nil {
-		return err
-	}
-	return f.policy.CheckAddr(ap.Addr())
+	return f.policy.CheckAddrPort(ap.Addr(), strconv.Itoa(int(ap.Port())))
 }
 
 // allowedTypes are the content types fetch reads.

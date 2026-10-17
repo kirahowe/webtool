@@ -37,6 +37,9 @@ type FetchConfig struct {
 	// ExtractSandbox is "required" (the default on macOS) or "off" (the
 	// default elsewhere, and for testing inside another sandbox).
 	ExtractSandbox string `json:"extract_sandbox"`
+	// FixtureOrigin is the loopback host:port the fixture build may
+	// fetch from. The release build refuses a config that sets it.
+	FixtureOrigin string `json:"fixture_origin"`
 }
 
 // maxBodyLimit bounds max_body_bytes: the reader is given the body whole.
@@ -44,9 +47,12 @@ const maxBodyLimit = fetch.MaxBodyLimit
 
 // SearchConfig picks the search backend.
 type SearchConfig struct {
-	Backend        string   `json:"backend"`         // "brave"
+	Backend        string   `json:"backend"`         // "brave", or "fixture" in the fixture build
 	APIKeyCommand  []string `json:"api_key_command"` // run without a shell
 	TimeoutSeconds int      `json:"timeout_seconds"` // default 20
+	// ResultsFile holds the fixture backend's results, a JSON array of
+	// {title, url, snippet}.
+	ResultsFile string `json:"results_file"`
 }
 
 const (
@@ -106,6 +112,9 @@ func loadConfig(path string) (Config, error) {
 	case c.Fetch.ExtractSandbox != "required" && c.Fetch.ExtractSandbox != "off":
 		return Config{}, fmt.Errorf("%s: extract_sandbox must be \"required\" or \"off\"", path)
 	}
+	if err := checkFixture(c); err != nil {
+		return Config{}, fmt.Errorf("%s: %v", path, err)
+	}
 	return c, nil
 }
 
@@ -116,6 +125,7 @@ func (c Config) fetchConfig() fetch.Config {
 		SnapshotDir:      c.SnapshotDir,
 		MaxSnapshotBytes: c.Fetch.MaxSnapshotBytes,
 		ExtractMemory:    c.Fetch.MaxReadMemoryBytes,
+		FixtureOrigin:    fixtureOrigin(c),
 	}
 }
 
@@ -123,6 +133,8 @@ func (c Config) searchReady() error {
 	switch {
 	case c.Search.Backend == "":
 		return errors.New("the config has no search backend")
+	case c.Search.Backend == "fixture":
+		return nil // checkFixture has read it
 	case c.Search.Backend != "brave":
 		return fmt.Errorf("unknown search backend %q; the one backend is brave", c.Search.Backend)
 	case len(c.Search.APIKeyCommand) == 0:

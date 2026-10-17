@@ -301,3 +301,34 @@ func TestLocalSuffixesRefused(t *testing.T) {
 		}
 	})
 }
+
+// An Origin lets through exactly its own address and port: any other
+// address or port is judged as it would be without one, and so is any
+// URL naming the origin by a host name.
+func TestOriginIsExact(t *testing.T) {
+	p := Policy{Origin: netip.MustParseAddrPort("127.0.0.1:8123")}
+	for _, u := range []string{"http://127.0.0.1:8123/", "https://127.0.0.1:8123/x", "http://[::ffff:127.0.0.1]:8123/"} {
+		pu, _ := url.Parse(u)
+		if err := p.CheckURL(pu); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+	for _, u := range []string{"http://127.0.0.1/", "http://127.0.0.1:8124/", "http://127.0.0.2:8123/", "http://[::1]:8123/",
+		"http://localhost:8123/", "http://fixture.example.com:8123/", "http://u@127.0.0.1:8123/", "ftp://127.0.0.1:8123/"} {
+		pu, _ := url.Parse(u)
+		if err := p.CheckURL(pu); err == nil {
+			t.Errorf("%s allowed", u)
+		}
+	}
+	rapid.Check(t, func(t *rapid.T) {
+		a := netip.AddrFrom4([4]byte{byte(rapid.IntRange(0, 255).Draw(t, "a")), byte(rapid.IntRange(0, 255).Draw(t, "b")), 0, 1})
+		port := rapid.SampledFrom([]string{"80", "443", "8123", "8124"}).Draw(t, "port")
+		if a == p.Origin.Addr() && port == "8123" {
+			return
+		}
+		got, want := p.CheckAddrPort(a, port), Policy{}.CheckAddrPort(a, port)
+		if (got == nil) != (want == nil) {
+			t.Fatalf("%s port %s: %v with the origin, %v without", a, port, got, want)
+		}
+	})
+}

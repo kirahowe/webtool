@@ -61,6 +61,9 @@ func newApp() app {
 			return fetch.New(fc)
 		},
 		newBackend: func(c SearchConfig) search.Backend {
+			if c.Backend == "fixture" {
+				return fixtureBackend(c)
+			}
 			return search.NewBrave(c.APIKeyCommand, time.Duration(c.TimeoutSeconds)*time.Second)
 		},
 	}

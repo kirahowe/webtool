@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"golang.org/x/net/idna"
@@ -35,6 +36,22 @@ type Policy struct {
 	// Only tests set it, to reach an httptest server on 127.0.0.1. The
 	// fetcher that production builds never does.
 	Allow []netip.Prefix
+	// Origin is one address and port let through that every other rule
+	// would refuse. Only the fixture build sets it, to reach a local
+	// server of test pages; see fetch.Config.FixtureOrigin.
+	Origin netip.AddrPort
+}
+
+// CheckAddrPort refuses an address and port fetch must not connect to:
+// anything CheckPort or CheckAddr refuses, unless it is exactly Origin.
+func (p Policy) CheckAddrPort(a netip.Addr, port string) error {
+	if p.Origin.IsValid() && a.WithZone("").Unmap() == p.Origin.Addr() && port == strconv.Itoa(int(p.Origin.Port())) {
+		return nil
+	}
+	if err := p.CheckPort(port); err != nil {
+		return err
+	}
+	return p.CheckAddr(a)
 }
 
 func (p Policy) allowed(a netip.Addr) bool {
@@ -110,15 +127,15 @@ func (p Policy) CheckURL(u *url.URL) error {
 		}
 		port = map[string]string{"http": "80", "https": "443"}[u.Scheme]
 	}
-	if err := p.CheckPort(port); err != nil {
-		return err
-	}
 	host := u.Hostname()
 	if a, err := netip.ParseAddr(host); err == nil {
 		if a.Zone() != "" {
 			return refuse("%s has a zone", host)
 		}
-		return p.CheckAddr(a)
+		return p.CheckAddrPort(a, port)
+	}
+	if err := p.CheckPort(port); err != nil {
+		return err
 	}
 	if strings.Contains(u.Host, "[") {
 		return refuse("%q is not a valid IPv6 address", host)
