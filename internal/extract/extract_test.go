@@ -166,12 +166,13 @@ func TestFailureReported(t *testing.T) {
 }
 
 // The parent holds a compact Page, however costly the page. The peak of
-// its heap is sampled during the read: here 5 MB of characters JSON would
-// escape six-fold, of entities, of plain words, and of quote marks, which
-// JSON doubles and so come near the read-back cap.
+// its heap is sampled during the read: here 5 MB of invalid UTF-8, which
+// comes back as three bytes of U+FFFD for each, the most any page can
+// write, of entities, of plain words, and of quote marks, which JSON
+// doubles.
 func TestParentMemoryBounded(t *testing.T) {
 	for name, body := range map[string][]byte{
-		"controls": []byte("<p>" + strings.Repeat("\x01", 5_000_000) + "</p>"),
+		"invalid":  []byte("<p>" + strings.Repeat("\xff", 5_000_000) + "</p>"),
 		"entities": []byte("<p>" + strings.Repeat("&lt;", 1_250_000) + "</p>"),
 		"text":     []byte("<p>" + strings.Repeat("word ", 1_000_000) + "</p>"),
 		"quotes":   []byte("<p>" + strings.Repeat(`"`, 5_000_000) + "</p>"),
@@ -208,14 +209,46 @@ func TestParentMemoryBounded(t *testing.T) {
 		if len([]rune(p.Text)) > 20_000 || p.TextRunes == 0 {
 			t.Errorf("%s: text %d runes, full %d", name, len([]rune(p.Text)), p.TextRunes)
 		}
-		// The cap on what is read back is about 3x the body. Reading it
-		// and decoding the Page costs about twice that, and the race
-		// detector's bookkeeping a little more.
+		// What is read back is at most about 3x the body. Reading it and
+		// decoding the Page peaks near five times that: the decoder
+		// doubles its buffer as the output arrives, holding the old and
+		// the new for a moment, beside the decoded strings. Invalid
+		// UTF-8 under the race detector peaks at about 4.6 times.
 		readBack := 3*len(body) + 16*r.TextChars
-		if grew := int64(peak.Load()) - int64(before.HeapInuse); grew > int64(3*readBack)+16<<20 {
+		if grew := int64(peak.Load()) - int64(before.HeapInuse); grew > int64(5*readBack)+16<<20 {
 			t.Errorf("%s: the parent's heap peaked %d MB above where it began, for a %d MB body", name, grew>>20, len(body)>>20)
 		}
 		runtime.KeepAlive(p)
+	}
+}
+
+// The read-back cap leaves a third to spare over the largest pages the
+// child can write: invalid UTF-8, characters JSON doubles or escapes six
+// bytes long, in the text, the visible text and the title.
+func TestReadBackMargin(t *testing.T) {
+	ctl := strings.Repeat("\x01", 1000)
+	for name, body := range map[string]string{
+		"invalid":  "<title>" + ctl + "</title><p>" + strings.Repeat("\xff", 100_000),
+		"quotes":   "<title>" + ctl + "</title><p>" + strings.Repeat(`"`, 100_000),
+		"newlines": "<title>" + ctl + "</title><pre>" + strings.Repeat("\n", 100_000),
+		"controls": "<title>" + ctl + "</title><p>" + strings.Repeat("\x01", 100_000),
+		"plain":    strings.Repeat("\xff\x01", 50_000),
+	} {
+		for _, textChars := range []int{1, 20_000, len(body)} {
+			mt := "text/html"
+			if name == "plain" {
+				mt = "text/plain"
+			}
+			header := fmt.Sprintf(`{"media_type":%q,"base":"","limit":%d,"text_chars":%d,"memory":%d,"body_bytes":%d}`+"\n",
+				mt, len(body), textChars, DefaultMemory, len(body))
+			var out strings.Builder
+			if code := Child(strings.NewReader(header+body), &out); code != 0 {
+				t.Fatalf("%s: exit %d", name, code)
+			}
+			if limit := readBackCap(len(body), textChars); int64(out.Len())*4/3 > limit {
+				t.Errorf("%s, %d chars: wrote %d bytes, cap %d", name, textChars, out.Len(), limit)
+			}
+		}
 	}
 }
 

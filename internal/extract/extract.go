@@ -10,7 +10,7 @@
 // fetch's context ends), its reach (no environment, and on macOS no
 // network and no file writes under sandbox-exec), and what the parent
 // reads back (a Page with the agent's text cut at Runner.TextChars and a
-// size cap of about three times the body). The parent's own memory is the
+// size cap of about four times the body). The parent's own memory is the
 // body plus that Page.
 package extract
 
@@ -211,7 +211,7 @@ func (r Runner) Extract(ctx context.Context, body []byte, mediaType string, base
 	cmd.Env = []string{} // nothing from the parent's environment
 	cmd.Stdin = io.MultiReader(bytes.NewReader(header), bytes.NewReader([]byte("\n")), bytes.NewReader(body))
 	bodyBytes := max(r.BodyBytes, len(body))
-	limitOut := int64(3*bodyBytes + 16*textChars + 4*text.MaxTitleRunes + 1<<16)
+	limitOut := readBackCap(bodyBytes, textChars)
 	errTail := &tail{max: 4 << 10}
 	cmd.Stderr = errTail
 	cmd.WaitDelay = time.Second
@@ -262,6 +262,18 @@ func (r Runner) Extract(ctx context.Context, body []byte, mediaType string, base
 		return text.Page{}, ErrUnreadable
 	}
 	return page, nil
+}
+
+// readBackCap bounds the JSON a child may write for a body of bodyBytes.
+// The visible text is at most three times the body: each byte of invalid
+// UTF-8 becomes U+FFFD, three bytes, and JSON at most doubles anything
+// else (a quote, a backslash, a newline). The agent's text and the title
+// are cut, and JSON writes no rune in more than six bytes. The cap allows
+// four times the body and sixteen bytes a rune, so a third more than the
+// worst page the reader can write, and the fields and their names fit in
+// the 64 KiB beside.
+func readBackCap(bodyBytes, textChars int) int64 {
+	return int64(4*bodyBytes + 16*textChars + 16*text.MaxTitleRunes + 1<<16)
 }
 
 // report writes why a child failed, and the end of its stderr, to the

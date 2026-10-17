@@ -47,11 +47,13 @@ func Find(normalisedText, quote string) bool {
 }
 
 // Segments splits visible text into the runs a quote may lie in: it breaks
-// at every Break, and leaves out text inside a bidi embedding, override or
+// at every Break and at a vertical tab, NEL, or line or paragraph
+// separator, and leaves out text inside a bidi embedding, override or
 // isolate, since that text may be drawn in another order than written.
 // Embeddings and overrides (LRE, RLE, LRO, RLO) end at their PDF and
 // isolates (LRI, RLI, FSI) at their PDI, as the Unicode bidi algorithm
-// pairs them, and all end with the paragraph. Each segment is normalised.
+// pairs them, and all end with the paragraph (a newline, a paragraph
+// separator or NEL). Each segment is normalised.
 func Segments(visible string) []string {
 	var segs []string
 	var cur strings.Builder
@@ -68,7 +70,10 @@ func Segments(visible string) []string {
 	var isolates []int
 	for _, r := range visible {
 		switch {
-		case r == Break:
+		case r == Break || r == '\v' || r == 0x2028:
+			// A vertical tab or line separator is no space in HTML, and a
+			// browser may draw nothing for it, so a quote never runs
+			// across one.
 			flush()
 		case r >= 0x202A && r <= 0x202E && r != 0x202C:
 			flush()
@@ -90,10 +95,15 @@ func Segments(visible string) []string {
 			if n := len(isolates); n > 0 {
 				stack, isolates = stack[:isolates[n-1]], isolates[:n-1]
 			}
-		case r == '\n' || r == 0x2029:
+		case r == '\n':
 			// A paragraph ends every embedding.
 			stack, isolates = stack[:0], isolates[:0]
 			cur.WriteRune(r)
+		case r == 0x2029 || r == 0x85:
+			// So does a paragraph separator or NEL, which is also a
+			// break, as above.
+			flush()
+			stack, isolates = stack[:0], isolates[:0]
 		case len(stack) > 0:
 			// Inside an embedding: not checkable.
 		default:

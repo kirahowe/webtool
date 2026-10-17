@@ -19,8 +19,8 @@ func Extract(ctx context.Context, body []byte, mediaType string, base *url.URL, 
 // Compact is the Page with only what the fetch output and check need: the
 // agent's text cut at textChars runes (its full length kept in
 // TextRunes), and the visible text without the characters quote matching
-// drops anyway. Breaks, newlines and bidi controls stay, since Segments
-// reads them.
+// drops anyway. Breaks, newlines, paragraph separators and bidi controls
+// stay, since Segments reads them.
 func (p Page) Compact(textChars int) Page {
 	r := []rune(p.Text)
 	p.TextRunes = len(r)
@@ -31,10 +31,12 @@ func (p Page) Compact(textChars int) Page {
 		switch {
 		case c == Break || c == '\n' || c >= 0x202A && c <= 0x202E || c >= 0x2066 && c <= 0x2069:
 			return c
+		case c == '\v' || c == 0x85 || c == 0x2028 || c == 0x2029:
+			// Separators Segments reads as breaks.
+			return c
 		case unicode.IsSpace(c):
-			// A line or paragraph separator, NEL, a vertical tab, a lone
-			// CR or form feed: a space, as Normalise reads it, so the
-			// words either side stay apart.
+			// Any other space, a lone CR or a form feed: a space, as
+			// Normalise reads it, so the words either side stay apart.
 			return ' '
 		case Invisible(c):
 			return -1

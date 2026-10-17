@@ -714,10 +714,11 @@ func TestCustomPropertiesMemoryBounded(t *testing.T) {
 }
 
 // Adjacent text runs cost the parser the square of their number, so a
-// document is parsed only to MaxTokens: these finish well inside the
-// default 20 second fetch limit.
+// document is parsed only to MaxTokens. Text between start tags, end
+// tags, comments, doctypes and bogus comments is cut, and each finishes
+// well inside the default 20 second fetch limit.
 func TestParserTokensBounded(t *testing.T) {
-	for _, pat := range []string{"<td>x", "</z>x", "<tr>x", "x<td>", "</z>xx"} {
+	for _, pat := range []string{"<td>x", "</z>x", "<tr>x", "x<td>", "</z>xx", "<!--c-->x", "<!doctype html>x", "<?x>x", "<!x>x"} {
 		body := []byte(strings.Repeat(pat, 5_000_000/len(pat)))
 		start := time.Now()
 		p := HTML(context.Background(), body, nil, len(body))
@@ -835,6 +836,29 @@ func TestCompactKeepsWordsApart(t *testing.T) {
 	}
 	if p := Read(context.Background(), []byte("<p>foo​bar</p>"), "text/html", nil, 1000, 1000); !FindIn(Segments(p.Visible), "foobar") {
 		t.Error("a zero-width space split a word")
+	}
+}
+
+// A vertical tab, NEL, and the line and paragraph separators are breaks:
+// no quote runs across one, in the page's text or its title. NEL and the
+// paragraph separator end the paragraph, so a bidi override before them
+// does not hide the text after; the others do not.
+func TestSeparatorsBreak(t *testing.T) {
+	for _, sep := range []string{"\v", "\u0085", "\u2028", "\u2029"} {
+		p := Read(context.Background(), []byte("<p>foo"+sep+"bar</p>"), "text/html", nil, 1000, 1000)
+		if FindIn(Segments(p.Visible), "foo bar") {
+			t.Errorf("%q: a quote ran across it in %q", sep, p.Visible)
+		}
+		ends := sep == "\u0085" || sep == "\u2029"
+		p = Read(context.Background(), []byte("<p>&#x202E;evil"+sep+"The drug is safe.</p>"), "text/html", nil, 1000, 1000)
+		if got := FindIn(Segments(p.Visible), "The drug is safe."); got != ends {
+			t.Errorf("%q: after an override, found %v in %q", sep, got, p.Visible)
+		}
+	}
+	for _, sep := range []string{"\v", "\u0085", "\u2028", "\u2029"} {
+		if FindIn(Segments("foo"+sep+"bar"), "foo bar") {
+			t.Errorf("title %q: a quote ran across it", sep)
+		}
 	}
 }
 
