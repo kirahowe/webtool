@@ -1,7 +1,7 @@
 // Command webtool gives relay's research roles the web, as an external
 // tool on relay's envelope protocol:
 //
-//	webtool --config FILE search|fetch|check
+//	webtool --config FILE search|fetch|check|ask
 //
 // The call comes on stdin and exactly one result goes to stdout;
 // diagnostics go to stderr. Exit status: 0 whenever a result was printed,
@@ -109,7 +109,7 @@ func (a app) run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "read settings from `FILE` (required)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: webtool --config FILE search|fetch|check")
+		fmt.Fprintln(fs.Output(), "usage: webtool --config FILE search|fetch|check|ask")
 		fmt.Fprintln(fs.Output(), "The call comes on stdin in relay's envelope protocol; see the README.")
 		fs.PrintDefaults()
 	}
@@ -121,7 +121,7 @@ func (a app) run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	command := fs.Arg(0)
-	if command != "search" && command != "fetch" && command != "check" {
+	if command != "search" && command != "fetch" && command != "check" && command != "ask" {
 		fmt.Fprintf(stderr, "webtool: unknown command %q\n", command)
 		fs.Usage()
 		return 2
@@ -131,7 +131,7 @@ func (a app) run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "webtool:", err)
 		return 1
 	}
-	if command == "search" {
+	if command == "search" || command == "ask" {
 		if err := cfg.searchReady(); err != nil {
 			fmt.Fprintln(stderr, "webtool:", err)
 			return 1
@@ -147,16 +147,19 @@ func (a app) run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		switch command {
 		case "search":
 			res = a.search(ctx, cfg, call.Input)
-		case "fetch", "check":
+		case "fetch", "check", "ask":
 			f, err := a.newFetcher(cfg, stderr)
 			if err != nil {
 				fmt.Fprintln(stderr, "webtool:", err)
 				return 1
 			}
-			if command == "fetch" {
+			switch command {
+			case "fetch":
 				res = fetchPage(ctx, f, cfg, call.Input)
-			} else {
+			case "check":
 				res = checkItems(ctx, f, call.Input)
+			default:
+				res = a.ask(ctx, cfg, f, call.Input)
 			}
 		}
 	}

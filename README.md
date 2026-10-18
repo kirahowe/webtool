@@ -1,8 +1,9 @@
 # webtool
 
-webtool gives relay's research roles
-the web: a search, a fetch, and a check that the pages a report cites say
-what the report quotes. It is an external tool. relay runs it once per call
+webtool gives relay's roles
+the web: a search, a fetch, an ask that searches and reads the top
+results, and a check that the pages a report cites say what the report
+quotes. It is an external tool. relay runs it once per call
 and speaks to it in relay's envelope protocol.
 
 Whoever wrote the pages an agent reads can also choose the next URL it
@@ -43,7 +44,7 @@ binary.
 ## Running
 
 ```sh
-webtool --config FILE search|fetch|check
+webtool --config FILE search|fetch|check|ask
 ```
 
 The call arrives on stdin as one JSON object, `{input, labels, call_id}`:
@@ -91,7 +92,7 @@ whole fetch may take, redirects and body included (20 seconds by default),
 how much of a body is read (5 MB), how many characters of text the
 agent is shown (20000), how much the snapshot directory may hold (2 GB;
 past that the oldest snapshots are removed), and how much memory the
-process that reads a page's text may use (512 MiB). `search` is needed only by the search command.
+process that reads a page's text may use (512 MiB). `search` is needed only by the search and ask commands.
 `api_key_command` is run without a shell, with only `PATH` and `HOME` in
 its environment, and its output, trimmed, is the API key. Keep the key in
 the keychain:
@@ -290,6 +291,47 @@ hidden in markup, in a colour that matches its background, say. A public address
 network, such as the router's own WAN address reached by hairpin NAT, is
 not known to webtool and is not refused.
 
+## ask
+
+Input: `{"query": "...", "n": 3}`. `query` is as for search. `n` is
+optional, 1 to 5, 3 by default.
+
+ask searches, then fetches the first `n` result URLs, each once, through
+the same guarded fetcher as fetch. There is no URL argument: the only
+URLs fetched are the ones the search backend returned, so the one thing
+the caller chooses is the query. It asks the backend for twice `n`
+results, so a URL that comes twice still leaves `n` pages. Pages are read
+one at a time, so allow `:timeout-seconds` for a search and five fetches.
+
+The output numbers the pages from 1 in search order. Each page starts
+with a line holding a random token made for this call, which page text
+cannot guess, then the search result's title and URL, then the page as
+fetch renders it, or the reason it could not be read:
+
+```
+2 pages for "zeffy agent support". Each page starts with a line "=== page N 3f9c0a1e5b7d2468 ===".
+
+=== page 1 3f9c0a1e5b7d2468 ===
+result_title: Zeffy help centre
+result_url: https://support.zeffy.com/
+url: https://support.zeffy.com/
+final_url: https://support.zeffy.com/
+status: 200
+...
+
+=== page 2 3f9c0a1e5b7d2468 ===
+result_title: ...
+result_url: http://10.0.0.1/
+error: refused: 10.0.0.1 is a private address
+```
+
+The output is labelled `contaminated`. The call is an error when no page
+could be read, and so is a failed search. No results is not an error.
+
+ask is made for relay's quarantined reader: a role that holds private
+data names it as the reader's inner tool and gets back only a typed
+answer, with sources as page numbers.
+
 ## check
 
 check is for relay's report verifier. relay calls it itself; it is not a
@@ -444,6 +486,23 @@ operator.
 
 check runs as `webtool --config /path/to/webtool.json check` with the same
 envelope on stdin.
+
+ask is `:egress` for the same reason: the query can carry data out. Give
+it to a role through the quarantined reader, named in `:quarantine`:
+
+```clojure
+"web" {:class :egress
+       :labels ["contaminated"]
+       :protocol :envelope
+       :timeout-seconds 150
+       :description "Search the web and read the top results."
+       :parameters {:type "object"
+                    :properties {:query {:type "string" :description "What to search for, up to 400 characters."}
+                                 :n {:type "integer" :minimum 1 :maximum 5 :description "How many result pages to read; 3 by default."}}
+                    :required ["query"]
+                    :additionalProperties false}
+       :command ["/path/to/webtool/bin/webtool" "--config" "/path/to/webtool.json" "ask"]}
+```
 
 ## License
 

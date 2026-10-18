@@ -63,6 +63,14 @@ func TestFixtureEndToEnd(t *testing.T) {
 		t.Fatalf("search: exit %d %+v %s", code, res, errOut)
 	}
 
+	// ask reads the fixture page and refuses the reserved name, as fetch
+	// would.
+	out, errOut, code = exec(newApp(), []string{"--config", cfg, "ask"}, call(`{"query": "anything", "n": 2}`))
+	res = oneResult(t, out)
+	if code != 0 || res.IsError || !strings.Contains(res.Content, "an attack page") || !strings.Contains(res.Content, "result_url: https://two.example/\nerror: refused:") {
+		t.Fatalf("ask: exit %d %+v %s", code, res, errOut)
+	}
+
 	out, errOut, code = exec(newApp(), []string{"--config", cfg, "fetch"}, call(`{"url": "`+srv.URL+`/"}`))
 	res = oneResult(t, out)
 	if code != 0 || res.IsError || !strings.Contains(res.Content, "an attack page") {

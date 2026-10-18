@@ -139,10 +139,10 @@ func TestMalformedCallsGetOneResult(t *testing.T) {
 func TestAnyInputGetsOneResult(t *testing.T) {
 	cfg := writeConfig(t, fullConfig)
 	rapid.Check(t, func(t *rapid.T) {
-		cmd := rapid.SampledFrom([]string{"search", "fetch", "check"}).Draw(t, "command")
+		cmd := rapid.SampledFrom([]string{"search", "fetch", "check", "ask"}).Draw(t, "command")
 		var in string
 		if rapid.Bool().Draw(t, "envelope") {
-			key := rapid.SampledFrom([]string{"url", "query", "count", "items", "quotes", "x"}).Draw(t, "key")
+			key := rapid.SampledFrom([]string{"url", "query", "count", "n", "items", "quotes", "x"}).Draw(t, "key")
 			val := rapid.SampledFrom([]string{`"https://a.example.com/"`, `""`, `3`, `[]`, `{}`, `null`, `[{"url": "u"}]`, `"‮"`}).Draw(t, "val")
 			in = call(`{"` + key + `": ` + val + `}`)
 		} else {
