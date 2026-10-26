@@ -25,14 +25,17 @@ import (
 // MaxBytes bounds what is read from stdin.
 const MaxBytes = 1 << 20
 
-// Labels relay knows. A label outside this set makes relay reject the
-// whole result.
+// The class labels. A result carries only these, since relay rejects a
+// result with any other label. A call may carry more: a caller can name
+// where something came from (such as ics:calendar), and webtool keeps
+// only the class labels of a call and ignores the rest, so a label it
+// does not know never stops a search.
 var knownLabels = []string{"contaminated", "private"}
 
 // Call is relay's request.
 type Call struct {
 	Input  map[string]json.RawMessage // the model's arguments, keys exact
-	Labels []string                   // the calling session's labels
+	Labels []string                   // the calling session's class labels; any others are dropped
 	CallID string
 }
 
@@ -65,12 +68,14 @@ func Parse(raw []byte) (Call, error) {
 	if !isKind(top["labels"], '[') {
 		return Call{}, errors.New("bad envelope: labels must be a list")
 	}
-	if err := json.Unmarshal(top["labels"], &c.Labels); err != nil {
+	var labels []string
+	if err := json.Unmarshal(top["labels"], &labels); err != nil {
 		return Call{}, errors.New("bad envelope: labels must be a list of strings")
 	}
-	for _, l := range c.Labels {
-		if !slices.Contains(knownLabels, l) {
-			return Call{}, errors.New("bad envelope: labels must be among " + strings.Join(knownLabels, ", "))
+	c.Labels = []string{}
+	for _, l := range labels {
+		if slices.Contains(knownLabels, l) && !slices.Contains(c.Labels, l) {
+			c.Labels = append(c.Labels, l)
 		}
 	}
 	if c.CallID, err = String(top["call_id"]); err != nil {

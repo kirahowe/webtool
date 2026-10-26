@@ -51,8 +51,10 @@ webtool --config FILE search|fetch|check|ask
 
 The call arrives on stdin as one JSON object, `{input, labels, call_id}`:
 the model's arguments, the calling session's labels and the call's id.
-webtool prints exactly one `{content, is_error, labels}` on stdout and
-nothing else. Diagnostics go to stderr.
+Of the call's labels webtool keeps `private` and `contaminated` and ignores
+any other, such as a label naming where something came from. webtool prints
+exactly one `{content, is_error, labels}` on stdout and nothing else.
+Diagnostics go to stderr.
 
 Everything webtool returns from the web carries the label `contaminated`,
 refusals included. A call it cannot read (bad JSON, a repeated key, an

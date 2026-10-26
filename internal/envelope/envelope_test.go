@@ -65,6 +65,35 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// A call may carry labels webtool does not know, such as a source label
+// relay keeps for provenance (ics:calendar, mail:x@example.com). They are
+// ignored, never a reason to refuse the call, and only the class labels
+// are kept.
+func TestParseIgnoresUnknownLabels(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		labels := rapid.SliceOf(rapid.OneOf(rapid.SampledFrom(knownLabels),
+			rapid.StringMatching(`[a-z]{1,8}:[a-z@.]{1,20}`), rapid.String())).Draw(t, "labels")
+		raw, err := json.Marshal(map[string]any{"input": map[string]any{"query": "q"}, "labels": labels, "call_id": "c"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("%s refused: %v", raw, err)
+		}
+		for _, l := range c.Labels {
+			if !slices.Contains(knownLabels, l) {
+				t.Fatalf("kept unknown label %q", l)
+			}
+		}
+		for _, k := range knownLabels {
+			if slices.Contains(labels, k) != slices.Contains(c.Labels, k) {
+				t.Fatalf("class label %q: given %v, kept %v", k, labels, c.Labels)
+			}
+		}
+	})
+}
+
 func TestInt(t *testing.T) {
 	for raw, want := range map[string]int{`3`: 3, `"4"`: 4, `" 5 "`: 5} {
 		if n, err := Int(json.RawMessage(raw)); err != nil || n != want {
