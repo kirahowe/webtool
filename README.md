@@ -160,9 +160,10 @@ https://www.iana.org/
 
 The target goes through every rule below, as any URL does, but it is never
 requested, not even resolved. If a rule refuses it, the result is an error
-naming the target and the rule. A target with an invisible character or a
-space that the URL writer would leave raw is refused too, so the line the
-agent sees is the address, byte for byte. No body is read and no snapshot is
+naming the target and the rule. A target with an invisible character, or with any character
+Unicode counts as a space (a no-break or ideographic space as much as an
+ASCII one), that the URL writer would leave raw is refused too, so the
+line the agent sees is the address, byte for byte. No body is read and no snapshot is
 kept for a moved page. Fetching the address is a new call, and relay can
 check it against the URLs it has shown the agent. A 3xx with no `Location`
 is an ordinary page.
@@ -357,23 +358,17 @@ error: refused: 10.0.0.1 is a private address
 The output is labelled `contaminated`. The call is an error when no page
 could be read, and so is a failed search. No results is not an error.
 
-ask is made for relay's quarantined reader: a role that holds private
-data names it as the reader's inner tool and gets back only a typed
-answer, with sources as page numbers.
-
 ## check
 
-check is for relay's report verifier. relay calls it itself; it is not a
-tool to grant to roles.
+check is not a tool to grant to roles. It was written for a report
+verifier, which relay no longer has; it stays as a command that a program
+can call to check quotes against pages.
 
 check exists to catch a research agent that invents or misquotes a
 citation. Against a page author who hides text from people it is best
 effort: without a rendering engine it cannot be complete, and
 stylesheets, scripts (which can rewrite the page after it loads; check
-reads the markup as served) and overlays are known limits. relay never
-trusts free text because check found it: only typed fields (dates,
-amounts, choices) can be cleared at the trust ladder's first step, and
-those are documented as open to outside influence. So check fails
+reads the markup as served) and overlays are known limits. So check fails
 closed. When the page has a trick its rules do not cover, the text is
 unchecked and its quotes are not found, rather than check gaining a rule
 for each trick.
@@ -486,16 +481,35 @@ item is the count of hidden text dropped from the page.
 
 ## In relay.edn
 
-Add the two tools under `:tools` and grant them to the research roles.
-Both are `:egress`: a URL or a query can carry data out, so once a session
-holds private data and contaminated text, relay holds each call for the
-operator.
+Add the tools under `:tools` and grant them to a scout, a role with
+`:public true`. They are `:egress`: the query or the URL goes out to
+someone outside, so relay lets only a public role have one. A public role
+is shown nothing private, so there is nothing of the operator's for it to
+send. No call is held for anyone, and there is no quarantine and no
+reader.
+
+relay checks every `:egress` call a scout makes before it runs. A `url`
+argument must appear character for character in an earlier result of an
+`:egress` tool in the same session. So must any `://` address in a query,
+from its scheme to the end of the query: webtool echoes a query back, so
+nothing may follow the address. A scout can fetch what a search or a page showed it, and a
+moved page's new address, but not an address it made up, which could carry
+something the steward told it. A redirect is never followed, so its
+target is fetched only by a new call, which relay checks the same way.
+
+relay can make that check only on a call it reads, so an `:egress` tool
+is an `:envelope` tool with its `:parameters` listed. Each parameter is
+`url`, a number or a yes-or-no value, or free text named in `:queries`.
+List a parameter there only when its text goes to a service you trust as
+you trust the model provider, as search's query goes to the search
+provider.
 
 ```clojure
 "web_search" {:class :egress
               :labels ["contaminated"]
               :protocol :envelope
               :timeout-seconds 60
+              :queries ["query"]
               :description "Search the web. Returns numbered results with title, URL and snippet."
               :parameters {:type "object"
                            :properties {:query {:type "string" :description "What to search for, up to 400 characters."}
@@ -507,33 +521,25 @@ operator.
              :labels ["contaminated"]
              :protocol :envelope
              :timeout-seconds 60
-             :description "Fetch a web page as text. Links show as text <url>. Local and private addresses are refused."
+             :description "Fetch a web page as text. Give a URL exactly as a search result or an earlier page showed it. Links show as text <url>."
              :parameters {:type "object"
-                          :properties {:url {:type "string" :description "An http or https URL."}}
+                          :properties {:url {:type "string" :description "An http or https URL from an earlier result."}}
                           :required ["url"]
                           :additionalProperties false}
              :command ["/path/to/webtool/bin/webtool" "--config" "/path/to/webtool.json" "fetch"]}
 ```
 
-check runs as `webtool --config /path/to/webtool.json check` with the same
-envelope on stdin.
-
-ask is `:egress` for the same reason: the query can carry data out. Give
-it to a role through the quarantined reader, named in `:quarantine`:
-
 ```clojure
-"web" {:class :egress
-       :labels ["contaminated"]
-       :protocol :envelope
-       :timeout-seconds 150
-       :description "Search the web and read the top results."
-       :parameters {:type "object"
-                    :properties {:query {:type "string" :description "What to search for, up to 400 characters."}
-                                 :n {:type "integer" :minimum 1 :maximum 5 :description "How many result pages to read; 3 by default."}}
-                    :required ["query"]
-                    :additionalProperties false}
-       :command ["/path/to/webtool/bin/webtool" "--config" "/path/to/webtool.json" "ask"]}
+:grants {"scout" {:public true :tools ["web_search" "web_fetch"]}}
 ```
+
+ask can be granted to a scout the same way, as an `:egress` tool with a
+`query`, listed in `:queries`, an optional integer `n`, and a
+`:timeout-seconds` of about 150. It
+takes no URL, so the only thing the scout chooses is the query.
+
+check runs as `webtool --config /path/to/webtool.json check` with the same
+envelope on stdin. It is not a tool to grant to a role.
 
 ## License
 
