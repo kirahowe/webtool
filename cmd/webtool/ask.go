@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kirahowe/webtool/internal/envelope"
+	"github.com/kirahowe/webtool/internal/fetch"
 	"github.com/kirahowe/webtool/internal/search"
 	"github.com/kirahowe/webtool/internal/text"
 )
@@ -47,11 +48,15 @@ func (a app) ask(ctx context.Context, cfg Config, f pageFetcher, in map[string]j
 		return failed(err)
 	}
 	pages := askPages(results, n)
+	shown := map[string]bool{}
+	for _, r := range results {
+		shown[r.URL] = true
+	}
 	var rendered []askedPage
 	ok := 0
 	for _, r := range pages {
 		p := askedPage{result: r}
-		res, err := f.Fetch(ctx, r.URL)
+		res, err := followShown(ctx, f, r.URL, shown)
 		if err != nil {
 			p.err = err
 		} else {
@@ -64,6 +69,23 @@ func (a app) ask(ctx context.Context, cfg Config, f pageFetcher, in map[string]j
 		Content: renderAsk(query, rendered, boundary()),
 		IsError: len(pages) > 0 && ok == 0,
 		Labels:  contaminated,
+	}
+}
+
+// MaxAskHops is how many redirects ask follows for one result.
+const MaxAskHops = 5
+
+// followShown fetches u and follows a redirect only to a URL that
+// appeared verbatim in the search results. Any other target is not
+// fetched: the moved page comes back as fetch reports it, so the search
+// backend, not a page, picks every URL ask reads.
+func followShown(ctx context.Context, f pageFetcher, u string, shown map[string]bool) (*fetch.Result, error) {
+	for hops := 0; ; hops++ {
+		res, err := f.Fetch(ctx, u)
+		if err != nil || res.Moved == "" || !shown[res.Moved] || hops == MaxAskHops {
+			return res, err
+		}
+		u = res.Moved
 	}
 }
 

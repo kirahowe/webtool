@@ -22,6 +22,7 @@ import (
 // with no page fails.
 type pagesFetcher struct {
 	pages   map[string]string
+	moves   map[string]string // URL -> where it redirects
 	mu      *sync.Mutex
 	fetched *[]string
 }
@@ -30,6 +31,9 @@ func (f pagesFetcher) Fetch(_ context.Context, u string) (*fetch.Result, error) 
 	f.mu.Lock()
 	*f.fetched = append(*f.fetched, u)
 	f.mu.Unlock()
+	if to, ok := f.moves[u]; ok {
+		return &fetch.Result{URL: u, Status: 301, Moved: to}, nil
+	}
 	body, ok := f.pages[u]
 	if !ok {
 		return &fetch.Result{URL: u}, errors.New("refused: 10.0.0.1 is a private address")
@@ -60,10 +64,16 @@ type askWorld struct {
 }
 
 func newAskWorld(results []search.Result, pages map[string]string) askWorld {
+	return newAskWorldMoves(results, pages, nil)
+}
+
+func newAskWorldMoves(results []search.Result, pages map[string]string, moves map[string]string) askWorld {
 	w := askWorld{fetched: &[]string{}, counts: &[]int{}, queries: &[]string{}}
 	mu := &sync.Mutex{}
 	w.app = app{
-		newFetcher: func(Config, io.Writer) (pageFetcher, error) { return pagesFetcher{pages, mu, w.fetched}, nil },
+		newFetcher: func(Config, io.Writer) (pageFetcher, error) {
+			return pagesFetcher{pages: pages, moves: moves, mu: mu, fetched: w.fetched}, nil
+		},
 		newBackend: func(SearchConfig) search.Backend { return askBackend{results, w.counts, w.queries} },
 	}
 	return w
@@ -211,6 +221,70 @@ func TestPropertyAsk(t *testing.T) {
 		}
 		if real != len(want) {
 			t.Fatalf("%d page lines with the token, want %d:\n%s", real, len(want), r.Content)
+		}
+	})
+}
+
+// A redirect is followed only to a URL the search returned, verbatim.
+func TestAskFollowsOnlyShownRedirects(t *testing.T) {
+	cfg := writeConfig(t, fullConfig)
+	w := newAskWorldMoves(results("https://old.example/", "https://new.example/", "https://x.example/"),
+		map[string]string{"https://new.example/": "the new page"},
+		map[string]string{"https://old.example/": "https://new.example/", "https://x.example/": "https://elsewhere.example/?d=secret"})
+	out, _, _ := exec(w.app, []string{"--config", cfg, "ask"}, call(`{"query": "q", "n": 3}`))
+	r := oneResult(t, out)
+	if r.IsError || !strings.Contains(r.Content, "the new page") {
+		t.Fatalf("%+v", r)
+	}
+	if slices.Contains(*w.fetched, "https://elsewhere.example/?d=secret") {
+		t.Fatalf("fetched %v", *w.fetched)
+	}
+	// The unshown target is reported as fetch reports it, on its own line.
+	if !strings.Contains(r.Content, "result_url: https://x.example/\nurl: https://x.example/\nstatus: 301\n") ||
+		!strings.Contains(r.Content, "\n\nhttps://elsewhere.example/?d=secret\n") {
+		t.Fatalf("%s", r.Content)
+	}
+	// A target that differs from a result by one character is not shown.
+	w = newAskWorldMoves(results("https://old.example/", "https://new.example/"), map[string]string{"https://new.example/": "p"},
+		map[string]string{"https://old.example/": "https://new.example"})
+	out, _, _ = exec(w.app, []string{"--config", cfg, "ask"}, call(`{"query": "q", "n": 1}`))
+	if r := oneResult(t, out); slices.Contains(*w.fetched, "https://new.example") || !strings.Contains(r.Content, "\nhttps://new.example\n") {
+		t.Fatalf("%v %s", *w.fetched, r.Content)
+	}
+}
+
+// Redirects among shown URLs stop after MaxAskHops, so a loop ends.
+func TestAskRedirectLoopEnds(t *testing.T) {
+	cfg := writeConfig(t, fullConfig)
+	w := newAskWorldMoves(results("https://a.example/", "https://b.example/"), nil,
+		map[string]string{"https://a.example/": "https://b.example/", "https://b.example/": "https://a.example/"})
+	out, _, _ := exec(w.app, []string{"--config", cfg, "ask"}, call(`{"query": "q", "n": 1}`))
+	r := oneResult(t, out)
+	if len(*w.fetched) != MaxAskHops+1 || !strings.Contains(r.Content, "This page has moved") {
+		t.Fatalf("%d fetches\n%s", len(*w.fetched), r.Content)
+	}
+}
+
+// For any results and any redirect map, every URL ask fetches is one the
+// search returned.
+func TestPropertyAskFetchesOnlyShownURLs(t *testing.T) {
+	cfg := writeConfig(t, fullConfig)
+	pool := []string{"https://a.example/", "https://b.example/", "https://c.example/", "https://hidden.example/?q=1", "https://other.example/"}
+	rapid.Check(t, func(t *rapid.T) {
+		urls := rapid.SliceOfN(rapid.SampledFrom(pool[:3]), 1, 6).Draw(t, "urls")
+		moves := map[string]string{}
+		for _, u := range pool {
+			if rapid.Bool().Draw(t, "moves "+u) {
+				moves[u] = rapid.SampledFrom(pool).Draw(t, "to "+u)
+			}
+		}
+		w := newAskWorldMoves(results(urls...), map[string]string{"https://a.example/": "x", "https://b.example/": "x", "https://c.example/": "x"}, moves)
+		out, _, _ := exec(w.app, []string{"--config", cfg, "ask"}, call(`{"query": "q", "n": 5}`))
+		oneResult(t, out)
+		for _, u := range *w.fetched {
+			if !slices.Contains(urls, u) {
+				t.Fatalf("fetched %s, results were %v", u, urls)
+			}
 		}
 	})
 }
