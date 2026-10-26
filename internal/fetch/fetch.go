@@ -1,6 +1,8 @@
 // Package fetch gets one web page for an agent, on the assumption that
-// the URL was chosen by an attacker. Every URL, the first and each
-// redirect, passes guard's rules before it is requested, and every
+// the URL was chosen by an attacker. The URL passes guard's rules before
+// it is requested. A redirect is never followed: the fetch reports where
+// the page moved, after the same rules have looked at the target, and the
+// caller decides whether to ask for it. Every
 // connection is checked again at the address actually dialed, so a name
 // that resolves somewhere it should not is refused however it resolves.
 package fetch
@@ -39,9 +41,6 @@ const UserAgent = "webtool/1 (+https://github.com/kirahowe/webtool)"
 // its use as a count of runes cannot overflow.
 const MaxBodyLimit = 256 << 20
 
-// MaxRedirects is how many redirects a fetch follows.
-const MaxRedirects = 5
-
 // Config bounds a fetch.
 type Config struct {
 	Timeout      time.Duration // the whole fetch, redirects and body included
@@ -66,24 +65,20 @@ type Config struct {
 // before ctx's deadline.
 type Extractor func(ctx context.Context, body []byte, mediaType string, base *url.URL, limit int) (text.Page, error)
 
-// Hop is one redirect: the URL requested and the status that sent the
-// fetch on.
-type Hop struct {
-	URL    string `json:"url"`
-	Status int    `json:"status"`
-}
-
 // Result is what a fetch found. A failed fetch fills in as much as it
-// got: the redirects so far, and the status once a response came.
+// got: the status once a response came, and the redirect target if there
+// was one.
 type Result struct {
 	URL string
-	// LastURL is the last URL requested: the final URL, or the redirect
-	// target the fetch failed on.
-	LastURL     string
-	FinalURL    string
+	// FinalURL is the URL that answered. It is empty when the page moved.
+	FinalURL string
+	// Moved is the absolute URL a 3xx response with a Location pointed
+	// to, resolved against URL. It is set only when the target passed
+	// the guard (or when the guard refused it, alongside the error), and
+	// it is never fetched. No body is read and no snapshot kept.
+	Moved       string
 	Status      int
 	ContentType string
-	Redirects   []Hop
 	SHA256      string    // of the raw body as read
 	BodyBytes   int       // as read
 	Truncated   bool      // the body was longer than MaxBodyBytes
@@ -259,10 +254,11 @@ func (f *Fetcher) control(_, address string, _ syscall.RawConn) error {
 // allowedTypes are the content types fetch reads.
 var allowedTypes = map[string]bool{"text/html": true, "application/xhtml+xml": true, "text/plain": true}
 
-// Fetch gets one URL, following at most MaxRedirects redirects, and keeps
-// a snapshot of what it read. A refusal is a *guard.Refusal.
+// Fetch gets one URL and keeps a snapshot of what it read. It follows no
+// redirect: a 3xx response with a Location returns a Result with Moved
+// set. A refusal is a *guard.Refusal.
 func (f *Fetcher) Fetch(ctx context.Context, raw string) (*Result, error) {
-	res := &Result{URL: raw, LastURL: raw, FetchedAt: f.now().UTC()}
+	res := &Result{URL: raw, FetchedAt: f.now().UTC()}
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || !u.IsAbs() {
 		return res, &guard.Refusal{Reason: "not an absolute URL"}
@@ -275,18 +271,8 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (*Result, error) {
 
 	client := &http.Client{
 		Transport: f.transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			res.Redirects = append(res.Redirects, Hop{URL: via[len(via)-1].URL.String(), Status: req.Response.StatusCode})
-			res.LastURL = req.URL.String()
-			if len(via) > MaxRedirects {
-				return &guard.Refusal{Reason: fmt.Sprintf("more than %d redirects", MaxRedirects)}
-			}
-			if err := f.policy.CheckURL(req.URL); err != nil {
-				return prefixed("a redirect to "+req.URL.String()+": ", err)
-			}
-			req.Header.Del("Referer")
-			return nil
-		},
+		// A redirect is reported, never followed.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -302,8 +288,10 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (*Result, error) {
 		return res, f.explain(ctx, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 && resp.Header.Get("Location") != "" {
+		return res, f.moved(res, resp)
+	}
 	res.FinalURL = resp.Request.URL.String()
-	res.LastURL = res.FinalURL
 
 	mediaType := ""
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -373,6 +361,27 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (*Result, error) {
 		return res, fmt.Errorf("could not keep the snapshot: %w", err)
 	}
 	return res, nil
+}
+
+// moved fills in res for a redirect response. The target is resolved
+// against the request URL and judged by the same rules as any URL, but
+// never requested. A target the agent could not read back exactly, such
+// as one holding invisible characters, is refused, since relay compares
+// the line verbatim.
+func (f *Fetcher) moved(res *Result, resp *http.Response) error {
+	target, err := resp.Location()
+	if err != nil {
+		return &guard.Refusal{Reason: "the page moved to an address that is not a URL"}
+	}
+	res.Moved = target.String()
+	if err := f.policy.CheckURL(target); err != nil {
+		return prefixed("a redirect to "+res.Moved+": ", err)
+	}
+	if res.Moved != text.EscapeOnly(res.Moved) || strings.ContainsAny(res.Moved, " \t\r\n") {
+		res.Moved = ""
+		return &guard.Refusal{Reason: "the page moved to an address with invisible characters or spaces"}
+	}
+	return nil
 }
 
 // resolveError is a host that did not resolve.

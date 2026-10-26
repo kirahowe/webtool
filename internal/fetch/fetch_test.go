@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"pgregory.net/rapid"
+
 	"github.com/kirahowe/webtool/internal/guard"
 	"github.com/kirahowe/webtool/internal/text"
 )
@@ -112,37 +114,57 @@ func TestFetchHTML(t *testing.T) {
 	}
 }
 
-func TestRedirectChain(t *testing.T) {
-	names := map[string]string{"a.example.com": "127.0.0.1", "b.example.com": "127.0.0.1"}
+// A redirect is reported, not followed: the result says where the page
+// moved, as an absolute URL, and the target is never requested.
+func TestRedirectNotFollowed(t *testing.T) {
+	var hits []string
 	var srv *httptest.Server
 	srv, f := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
 		switch r.URL.Path {
-		case "/1":
-			http.SetCookie(w, &http.Cookie{Name: "c", Value: "v"})
-			http.Redirect(w, r, "/2", http.StatusMovedPermanently)
-		case "/2":
+		case "/rel":
+			http.Redirect(w, r, "/next?a=1#frag", http.StatusMovedPermanently)
+		case "/abs":
 			http.Redirect(w, r, "http://b.example.com:"+port(srv)+"/3", http.StatusFound)
-		case "/3":
-			if r.Header.Get("Cookie") != "" || r.Header.Get("Referer") != "" {
-				http.Error(w, "carried "+r.Header.Get("Cookie")+r.Header.Get("Referer"), 400)
-				return
-			}
-			w.Header().Set("Content-Type", "text/plain")
-			fmt.Fprint(w, "done")
+		case "/seeother":
+			http.Redirect(w, r, "../up", http.StatusSeeOther)
+		default:
+			t.Errorf("redirect target requested: %s", r.URL.Path)
 		}
-	}), names)
-	start := "http://a.example.com:" + port(srv) + "/1"
-	res, err := f.Fetch(context.Background(), start)
-	if err != nil {
-		t.Fatal(err)
+	}), map[string]string{"b.example.com": "127.0.0.1"})
+	for path, want := range map[string]string{
+		"/rel":      srv.URL + "/next?a=1#frag",
+		"/abs":      "http://b.example.com:" + port(srv) + "/3",
+		"/seeother": srv.URL + "/up",
+	} {
+		res, err := f.Fetch(context.Background(), srv.URL+path)
+		if err != nil || res.Moved != want || res.FinalURL != "" || res.SHA256 != "" || res.Status < 301 {
+			t.Fatalf("%s: %v %+v", path, err, res)
+		}
 	}
-	want := []Hop{{start, 301}, {"http://a.example.com:" + port(srv) + "/2", 302}}
-	if fmt.Sprint(res.Redirects) != fmt.Sprint(want) || res.Page.Text != "done" || res.Status != 200 {
-		t.Fatalf("%+v %q", res.Redirects, res.Page.Text)
+	if len(hits) != 3 {
+		t.Fatalf("hits %v", hits)
+	}
+	if entries, _ := os.ReadDir(f.cfg.SnapshotDir); len(entries) != 0 {
+		t.Fatalf("a snapshot was kept for a moved page: %v", entries)
 	}
 }
 
-func TestRedirectsRechecked(t *testing.T) {
+// A 3xx without a Location is an ordinary page.
+func TestRedirectWithoutLocation(t *testing.T) {
+	srv, f := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusNotModified)
+	}), nil)
+	res, err := f.Fetch(context.Background(), srv.URL+"/")
+	if err != nil || res.Moved != "" || res.Status != 304 {
+		t.Fatalf("%v %+v", err, res)
+	}
+}
+
+// The target goes through the same guards as any URL, and is still not
+// requested.
+func TestRedirectTargetChecked(t *testing.T) {
 	cases := map[string]string{
 		"http://10.0.0.1/":           "10.0.0.1 is a private address",
 		"http://localhost/":          "local name",
@@ -151,40 +173,90 @@ func TestRedirectsRechecked(t *testing.T) {
 		"http://user:pw@example.com": "credentials",
 		"http://0x7f.1/":             "non-canonical",
 		"http://[::ffff:10.1.2.3]/":  "10.1.2.3 is a private address",
-		"http://rebind.example.com/": "rebind.example.com resolves to a refused address: 192.168.1.1 is a private address",
+		"http://a%0Ab.example.com/x": "",
 	}
 	for target, want := range cases {
 		t.Run(target, func(t *testing.T) {
 			srv, f := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				http.Redirect(w, r, target, http.StatusFound)
-			}), map[string]string{"rebind.example.com": "192.168.1.1"})
+				w.Header().Set("Location", target)
+				w.WriteHeader(http.StatusFound)
+			}), nil)
 			res, err := f.Fetch(context.Background(), srv.URL+"/")
-			refusal(t, err, want)
-			if len(res.Redirects) != 1 || res.Redirects[0].Status != 302 {
-				t.Fatalf("chain %+v", res.Redirects)
+			if want == "" {
+				if err == nil {
+					t.Fatalf("accepted %q: %+v", target, res)
+				}
+				return
 			}
+			refusal(t, err, want)
 		})
 	}
 }
 
-func TestTooManyRedirects(t *testing.T) {
+// The address shown holds no invisible character: one in the path comes
+// out percent-encoded, and one that would stay raw is refused.
+func TestMovedShowsNoInvisibleCharacters(t *testing.T) {
+	var loc string
 	srv, f := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, r.URL.Path+"x", http.StatusFound)
+		w.Header().Set("Location", loc)
+		w.WriteHeader(http.StatusFound)
 	}), nil)
-	_, err := f.Fetch(context.Background(), srv.URL+"/")
-	refusal(t, err, "more than 5 redirects")
-
-	srv2, f2 := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if n := strings.Count(r.URL.Path, "x"); n < 5 {
-			http.Redirect(w, r, r.URL.Path+"x", http.StatusFound)
-			return
-		}
-		fmt.Fprint(w, "made it")
-	}), nil)
-	res, err := f2.Fetch(context.Background(), srv2.URL+"/")
-	if err != nil || len(res.Redirects) != 5 {
-		t.Fatalf("five redirects: %v %+v", err, res.Redirects)
+	loc = "/a\u202eb"
+	res, err := f.Fetch(context.Background(), srv.URL+"/")
+	if err != nil || res.Moved != text.EscapeOnly(res.Moved) || !strings.Contains(res.Moved, "%E2%80%AE") {
+		t.Fatalf("%v %q", err, res.Moved)
 	}
+	loc = "/a?q=\u200b"
+	res, err = f.Fetch(context.Background(), srv.URL+"/")
+	refusal(t, err, "invisible characters")
+	if res.Moved != "" {
+		t.Fatalf("an unreadable target was reported: %q", res.Moved)
+	}
+}
+
+// The redirect target is not even resolved, so a name that would rebind
+// is never looked up.
+func TestRedirectTargetNotResolved(t *testing.T) {
+	var srv *httptest.Server
+	srv, f := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://other.example.com:"+port(srv)+"/2", http.StatusFound)
+	}), nil)
+	var asked []string
+	f.lookup = func(_ context.Context, host string) ([]netip.Addr, error) {
+		asked = append(asked, host)
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	res, err := f.Fetch(context.Background(), "http://rebind.example.com:"+port(srv)+"/1")
+	if err != nil || res.Moved != "http://other.example.com:"+port(srv)+"/2" {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if fmt.Sprint(asked) != "[rebind.example.com]" {
+		t.Fatalf("resolved %v", asked)
+	}
+}
+
+// Whatever the target looks like, the shown address is exactly one the
+// guard would let through as a first URL, and fetching it again gives
+// the same judgement.
+func TestMovedIsAFetchableURL(t *testing.T) {
+	var target string
+	var code int
+	srv, f := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", target)
+		w.WriteHeader(code)
+	}), map[string]string{"pub.example.com": "127.0.0.1"})
+	rapid.Check(t, func(t *rapid.T) {
+		target = rapid.SampledFrom([]string{"/p", "/p/q?x=1", "../x", "http://pub.example.com/a", "https://pub.example.com:443/", "//pub.example.com/z", "?q=2", "#f"}).Draw(t, "target")
+		code = rapid.SampledFrom([]int{301, 302, 303, 307, 308}).Draw(t, "code")
+		res, err := f.Fetch(context.Background(), srv.URL+"/a/b")
+		if err != nil {
+			return // refused by port rules for 443: fine
+		}
+		u, perr := url.Parse(res.Moved)
+		if perr != nil || !u.IsAbs() || f.policy.CheckURL(u) != nil || res.Moved != u.String() || res.Status != code {
+			t.Fatalf("%q -> %q (%v)", target, res.Moved, perr)
+		}
+	})
 }
 
 // A name that resolves to a refused address is refused at the dial, so
@@ -413,13 +485,9 @@ func TestTLSAndHTTP2(t *testing.T) {
 // Each connection resolves and checks afresh, so a name that answers
 // differently the second time is caught on the second dial.
 func TestRebindingBetweenRequests(t *testing.T) {
-	var srv *httptest.Server
 	srv, f := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/1" {
-			http.Redirect(w, r, "/2", http.StatusFound)
-			return
-		}
-		t.Errorf("second request reached the server")
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "ok")
 	}), nil)
 	calls := 0
 	f.lookup = func(context.Context, string) ([]netip.Addr, error) {
@@ -429,22 +497,11 @@ func TestRebindingBetweenRequests(t *testing.T) {
 		}
 		return []netip.Addr{netip.MustParseAddr("10.0.0.1")}, nil
 	}
-	_, err := f.Fetch(context.Background(), "http://rebind.example.com:"+port(srv)+"/1")
-	refusal(t, err, "10.0.0.1 is a private address")
-	if calls != 2 {
-		t.Fatalf("resolved %d times", calls)
+	if _, err := f.Fetch(context.Background(), "http://rebind.example.com:"+port(srv)+"/1"); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestLastURLOnFailedRedirect(t *testing.T) {
-	var srv *httptest.Server
-	srv, f := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://other.example.org:"+port(srv)+"/x", http.StatusFound)
-	}), nil)
-	res, err := f.Fetch(context.Background(), srv.URL+"/")
-	if err == nil || res.LastURL != "http://other.example.org:"+port(srv)+"/x" || res.FinalURL != "" {
-		t.Fatalf("%v %+v", err, res)
-	}
+	_, err2 := f.Fetch(context.Background(), "http://rebind.example.com:"+port(srv)+"/1")
+	refusal(t, err2, "10.0.0.1 is a private address")
 }
 
 func TestExtractionUnderDeadline(t *testing.T) {

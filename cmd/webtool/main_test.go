@@ -182,8 +182,8 @@ func TestFetchOutput(t *testing.T) {
 	page := strings.Repeat("word ", 20) + "‮end"
 	res := &fetch.Result{
 		FinalURL: "https://b.example.com/", Status: 200, ContentType: "text/html", SHA256: "abc",
-		Redirects: []fetch.Hop{{URL: "https://a.example.com/", Status: 301}}, Truncated: true,
-		Page: text.Page{Title: "T​", Text: page, Hidden: 7},
+		Truncated: true,
+		Page:      text.Page{Title: "T​", Text: page, Hidden: 7},
 	}
 	out, _, _ := exec(fakeApp(res), []string{"--config", cfg, "fetch"}, call(`{"url": "https://a.example.com/"}`))
 	r := oneResult(t, out)
@@ -192,7 +192,6 @@ final_url: https://b.example.com/
 status: 200
 content_type: text/html
 sha256: abc
-redirects: https://a.example.com/ (301) -> https://b.example.com/
 title: T\u{200B}
 warning: 7 characters of hidden text dropped
 warning: 2 invisible or formatting characters escaped as \u{XXXX}
@@ -203,6 +202,21 @@ warning: the body is longer than 100000 bytes and only that much was read
 [text truncated: showing 50 of 104 characters]`
 	if r.IsError || r.Content != want || !slices.Equal(r.Labels, contaminated) {
 		t.Fatalf("got\n%s\nwant\n%s", r.Content, want)
+	}
+}
+
+func TestFetchMovedOutput(t *testing.T) {
+	cfg := writeConfig(t, fullConfig)
+	res := &fetch.Result{URL: "https://a.example.com/", Status: 301, Moved: "https://b.example.com/new?x=1"}
+	out, _, _ := exec(fakeApp(res), []string{"--config", cfg, "fetch"}, call(`{"url": "https://a.example.com/"}`))
+	r := oneResult(t, out)
+	want := "url: https://a.example.com/\nstatus: 301\n\nThis page has moved. It was not followed. Its new address is:\n\nhttps://b.example.com/new?x=1\n"
+	if r.IsError || r.Content != want || !slices.Equal(r.Labels, contaminated) {
+		t.Fatalf("got\n%q\nwant\n%q", r.Content, want)
+	}
+	// The address is one whole line, verbatim.
+	if !slices.Contains(strings.Split(r.Content, "\n"), res.Moved) {
+		t.Fatal("the address is not on its own line")
 	}
 }
 

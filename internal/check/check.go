@@ -102,11 +102,12 @@ type ItemReport struct {
 	Complete bool `json:"complete"`
 	// Uncheckable, when not empty, says why no quote on the page can be
 	// vouched for: then every quote is reported not found.
-	Uncheckable    string        `json:"uncheckable"`
-	Error          string        `json:"error"`
-	Status         int           `json:"status"`
-	FinalURL       string        `json:"final_url"`
-	Redirects      []fetch.Hop   `json:"redirects"`
+	Uncheckable string `json:"uncheckable"`
+	Error       string `json:"error"`
+	Status      int    `json:"status"`
+	FinalURL    string `json:"final_url"`
+	// MovedTo is where a redirect response pointed. It is never fetched.
+	MovedTo        string        `json:"moved_to"`
 	CrossesDomains bool          `json:"crosses_domains"`
 	Domain         string        `json:"domain"`
 	FinalDomain    string        `json:"final_domain"`
@@ -151,15 +152,13 @@ func Run(ctx context.Context, f Fetcher, items []Item) Report {
 
 // Describe builds the report for one item from its fetch.
 func Describe(it Item, res *fetch.Result, err error) ItemReport {
-	rep := ItemReport{URL: text.EscapeOnly(it.URL), Redirects: []fetch.Hop{}, Quotes: []QuoteReport{}}
+	rep := ItemReport{URL: text.EscapeOnly(it.URL), Quotes: []QuoteReport{}}
 	if res == nil {
 		res = &fetch.Result{}
 	}
 	rep.Status = res.Status
 	rep.FinalURL = text.EscapeOnly(res.FinalURL)
-	for _, h := range res.Redirects {
-		rep.Redirects = append(rep.Redirects, fetch.Hop{URL: text.EscapeOnly(h.URL), Status: h.Status})
-	}
+	rep.MovedTo = text.EscapeOnly(res.Moved)
 	// Domains are compared unescaped and reported escaped.
 	if h := hostOf(it.URL); h != "" {
 		rep.Host, rep.Domain = Host(h), text.EscapeOnly(Domain(h))
@@ -170,6 +169,8 @@ func Describe(it Item, res *fetch.Result, err error) ItemReport {
 	rep.CrossesDomains = crosses(chain(it.URL, res))
 	if err != nil {
 		rep.Error = text.EscapeOnly(err.Error())
+	} else if res.Moved != "" {
+		rep.Error = "the page has moved to " + text.EscapeOnly(res.Moved) + " and redirects are not followed"
 	} else {
 		rep.Fetched = true
 		p := res.Page
@@ -201,19 +202,11 @@ func Describe(it Item, res *fetch.Result, err error) ItemReport {
 	return rep
 }
 
-// chain is every URL the fetch requested or was sent to, in order, ending
-// at the final URL or at the redirect target it failed on.
+// chain is the URL asked for and, if the page moved, where it moved to.
 func chain(start string, res *fetch.Result) []string {
 	urls := []string{start}
-	for i, h := range res.Redirects {
-		if i > 0 {
-			urls = append(urls, h.URL)
-		}
-	}
-	for _, last := range []string{res.LastURL, res.FinalURL} {
-		if last != "" && last != urls[len(urls)-1] {
-			urls = append(urls, last)
-		}
+	if res.Moved != "" {
+		urls = append(urls, res.Moved)
 	}
 	return urls
 }

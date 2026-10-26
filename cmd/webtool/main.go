@@ -257,17 +257,17 @@ func renderPage(res *fetch.Result, maxBody int64, maxChars int) string {
 		fmt.Fprintf(&b, "%s: %s\n", k, v)
 	}
 	line("url", res.URL)
+	if res.Moved != "" {
+		line("status", fmt.Sprint(res.Status))
+		// The address stands alone on its line, exactly as it is to be
+		// fetched: relay lets a later fetch pass only a URL it was shown.
+		fmt.Fprintf(&b, "\nThis page has moved. It was not followed. Its new address is:\n\n%s\n", res.Moved)
+		return b.String()
+	}
 	line("final_url", res.FinalURL)
 	line("status", fmt.Sprint(res.Status))
 	line("content_type", res.ContentType)
 	line("sha256", res.SHA256)
-	if len(res.Redirects) > 0 {
-		var hops []string
-		for _, h := range res.Redirects {
-			hops = append(hops, fmt.Sprintf("%s (%d)", h.URL, h.Status))
-		}
-		line("redirects", strings.Join(append(hops, res.FinalURL), " -> "))
-	}
 	if title := []rune(res.Page.Title); len(title) > 0 {
 		line("title", string(title[:min(len(title), maxChars)]))
 	}

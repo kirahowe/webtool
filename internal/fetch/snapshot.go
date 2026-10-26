@@ -22,7 +22,6 @@ type Meta struct {
 	Status         int       `json:"status"`
 	ContentType    string    `json:"content_type"`
 	FetchedAt      time.Time `json:"fetched_at"`
-	Redirects      []Hop     `json:"redirects"`
 	SHA256         string    `json:"sha256"`
 	BodyBytes      int       `json:"body_bytes"`
 	Truncated      bool      `json:"truncated"`
@@ -58,13 +57,9 @@ func (f *Fetcher) snapshot(ctx context.Context, res *Result, body []byte) error 
 	txt, invisible := SnapshotText(res.Page)
 	// The URLs are the attacker's text too, and the operator may read
 	// this file in a terminal.
-	redirects := []Hop{}
-	for _, h := range res.Redirects {
-		redirects = append(redirects, Hop{URL: text.EscapeOnly(h.URL), Status: h.Status})
-	}
 	meta, err := json.MarshalIndent(Meta{
 		URL: text.EscapeOnly(res.URL), FinalURL: text.EscapeOnly(res.FinalURL), Status: res.Status, ContentType: res.ContentType,
-		FetchedAt: res.FetchedAt, Redirects: redirects, SHA256: res.SHA256, BodyBytes: res.BodyBytes,
+		FetchedAt: res.FetchedAt, SHA256: res.SHA256, BodyBytes: res.BodyBytes,
 		Truncated: res.Truncated, HiddenChars: res.Page.Hidden, InvisibleChars: invisible,
 	}, "", "  ")
 	if err != nil {

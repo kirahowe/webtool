@@ -52,28 +52,36 @@ func TestFixtureOriginOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.lookup = fakeLookup(map[string]string{"rebind.example.com": "127.0.0.1"})
-	for _, path := range []string{"/page", "/same"} {
-		res, err := f.Fetch(context.Background(), srv.URL+path)
-		if err != nil || res.Page.Text != "fixture page" {
-			t.Fatalf("%s: %v %+v", path, err, res)
-		}
+	res, err := f.Fetch(context.Background(), srv.URL+"/page")
+	if err != nil || res.Page.Text != "fixture page" {
+		t.Fatalf("/page: %v %+v", err, res)
+	}
+	// A redirect inside the origin is reported, not followed.
+	res, err = f.Fetch(context.Background(), srv.URL+"/same")
+	if err != nil || res.Moved != srv.URL+"/page" {
+		t.Fatalf("/same: %v %+v", err, res)
 	}
 	if f.controls.Load() == 0 {
 		t.Fatal("the dial skipped the Control hook")
 	}
 	for path, want := range map[string]string{
-		"/tailnet":  "100.100.100.100 is a shared address",
-		"/private":  "10.0.0.1 is a private address",
-		"/router":   "192.168.1.1 is a private address",
-		"/other":    "port " + port(other),
-		"/port80":   "127.0.0.1 is a loopback address",
-		"/v6":       "port " + port(srv),
-		"/name":     "port " + port(srv),
-		"/rebind":   "port " + port(srv),
-		"/rebind80": "127.0.0.1 is a loopback address",
+		"/tailnet": "100.100.100.100 is a shared address",
+		"/private": "10.0.0.1 is a private address",
+		"/router":  "192.168.1.1 is a private address",
+		"/other":   "port " + port(other),
+		"/port80":  "127.0.0.1 is a loopback address",
+		"/v6":      "port " + port(srv),
+		"/name":    "port " + port(srv),
+		"/rebind":  "port " + port(srv),
 	} {
 		_, err := f.Fetch(context.Background(), srv.URL+path)
 		refusal(t, err, want)
+	}
+	// A name the guard cannot judge by its form is reported unresolved.
+	// The target is never dialed, so the resolver is not asked about it.
+	res, err = f.Fetch(context.Background(), srv.URL+"/rebind80")
+	if err != nil || res.Moved != "http://rebind.example.com/" {
+		t.Fatalf("/rebind80: %v %+v", err, res)
 	}
 	for u, want := range map[string]string{
 		other.URL:                             "port " + port(other),

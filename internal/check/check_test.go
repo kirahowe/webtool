@@ -88,13 +88,13 @@ func TestDomain(t *testing.T) {
 	}
 }
 
-func result(final string, hops []fetch.Hop, body string) *fetch.Result {
-	return &fetch.Result{Status: 200, FinalURL: final, Redirects: hops, SHA256: "abc", Page: text.Page{Text: body, Visible: body, Hidden: 3}}
+func result(final string, body string) *fetch.Result {
+	return &fetch.Result{Status: 200, FinalURL: final, SHA256: "abc", Page: text.Page{Text: body, Visible: body, Hidden: 3}}
 }
 
 func TestDescribe(t *testing.T) {
 	it := Item{URL: "https://news.example.com/a", Quotes: []string{"the “quick” brown", "THE \"QUICK\"", "absent", "quick”​ brown", ""}}
-	res := result("https://www.example.com/b", []fetch.Hop{{URL: it.URL, Status: 301}}, `The "quick"  brown fox.`)
+	res := result("https://www.example.com/b", `The "quick"  brown fox.`)
 	rep := Describe(it, res, nil)
 	if !rep.Fetched || rep.Error != "" || rep.Status != 200 || rep.CrossesDomains || rep.Domain != "example.com" ||
 		rep.FinalDomain != "example.com" || rep.SHA256 != "abc" || rep.HiddenChars != 3 {
@@ -112,24 +112,21 @@ func TestDescribe(t *testing.T) {
 	}
 }
 
-func TestCrossDomainRedirect(t *testing.T) {
-	cases := []struct {
-		hops  []fetch.Hop
-		final string
-		want  bool
-	}{
-		{nil, "https://a.example.com/", false},
-		{[]fetch.Hop{{URL: "https://a.example.com/", Status: 302}}, "https://b.example.com/", false},
-		{[]fetch.Hop{{URL: "https://a.example.com/", Status: 302}}, "https://example.org/", true},
-		// Out and back again still crossed.
-		{[]fetch.Hop{{URL: "https://a.example.com/", Status: 302}, {URL: "https://t.co/x", Status: 301}}, "https://example.com/", true},
-		{[]fetch.Hop{{URL: "https://a.example.com/", Status: 302}}, "https://a.example.co.uk/", true},
-	}
-	for _, c := range cases {
-		rep := Describe(Item{URL: "https://a.example.com/"}, result(c.final, c.hops, ""), nil)
-		if rep.CrossesDomains != c.want {
-			t.Errorf("%v -> %s: %v", c.hops, c.final, rep.CrossesDomains)
+func TestCrossDomainMove(t *testing.T) {
+	for moved, want := range map[string]bool{
+		"https://b.example.com/":   false,
+		"https://example.org/":     true,
+		"https://a.example.co.uk/": true,
+	} {
+		res := &fetch.Result{Status: 302, Moved: moved}
+		rep := Describe(Item{URL: "https://a.example.com/", Quotes: []string{"x"}}, res, nil)
+		if rep.CrossesDomains != want || rep.MovedTo != moved || rep.Fetched || rep.Quotes[0].Found || !strings.Contains(rep.Error, "moved") {
+			t.Errorf("%s: %+v", moved, rep)
 		}
+	}
+	rep := Describe(Item{URL: "https://a.example.com/"}, result("https://a.example.com/", ""), nil)
+	if rep.CrossesDomains || rep.MovedTo != "" {
+		t.Fatalf("%+v", rep)
 	}
 }
 
@@ -148,7 +145,7 @@ func (f fakeFetcher) Fetch(_ context.Context, u string) (*fetch.Result, error) {
 	if !ok {
 		return &fetch.Result{URL: u}, errors.New("could not connect")
 	}
-	return result(u, nil, body), nil
+	return result(u, body), nil
 }
 
 func TestRunKeepsOrder(t *testing.T) {
@@ -176,7 +173,7 @@ func TestShape(t *testing.T) {
 	}
 	slices.Sort(keys)
 	want := []string{"complete", "crosses_domains", "domain", "error", "fetched", "final_domain", "final_host", "final_url",
-		"hidden_chars", "host", "quotes", "redirects", "sha256", "status", "uncheckable", "url"}
+		"hidden_chars", "host", "moved_to", "quotes", "sha256", "status", "uncheckable", "url"}
 	if !slices.Equal(keys, want) {
 		t.Fatalf("keys %v", keys)
 	}
@@ -203,7 +200,7 @@ func TestNotesAreNotThePage(t *testing.T) {
 
 func TestEveryFieldEscaped(t *testing.T) {
 	bidi := "\u202e"
-	res := &fetch.Result{Status: 302, Redirects: []fetch.Hop{{URL: "https://a.com/?" + bidi, Status: 302}}, LastURL: "https://b.com/" + bidi}
+	res := &fetch.Result{Status: 302, Moved: "https://b.com/" + bidi}
 	rep := Describe(Item{URL: "https://a.com/?" + bidi, Quotes: []string{bidi}}, res, errors.New("refused: "+bidi))
 	raw, _ := json.Marshal(rep)
 	if strings.ContainsRune(string(raw), '\u202e') {
@@ -224,7 +221,7 @@ func TestEveryFieldEscaped(t *testing.T) {
 
 // A redirect counts even when its target failed before answering.
 func TestCrossingToAFailedTarget(t *testing.T) {
-	res := &fetch.Result{Redirects: []fetch.Hop{{URL: "https://a.example.com/", Status: 302}}, LastURL: "https://other.example.org/"}
+	res := &fetch.Result{Moved: "https://other.example.org/"}
 	rep := Describe(Item{URL: "https://a.example.com/"}, res, errors.New("could not connect"))
 	if !rep.CrossesDomains {
 		t.Fatal("crossing to a failed target missed")
@@ -232,7 +229,7 @@ func TestCrossingToAFailedTarget(t *testing.T) {
 }
 
 func TestIdeographicFullStop(t *testing.T) {
-	res := result("https://b.example.com/", []fetch.Hop{{URL: "https://a.example.com。/", Status: 302}}, "")
+	res := &fetch.Result{Moved: "https://b.example.com/"}
 	rep := Describe(Item{URL: "https://a.example.com。/"}, res, nil)
 	if rep.Domain != "example.com" || rep.CrossesDomains {
 		t.Fatalf("%+v", rep)
