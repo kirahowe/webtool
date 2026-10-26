@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 
 	"golang.org/x/net/html/charset"
 
@@ -377,7 +378,9 @@ func (f *Fetcher) moved(res *Result, resp *http.Response) error {
 	if err := f.policy.CheckURL(target); err != nil {
 		return prefixed("a redirect to "+res.Moved+": ", err)
 	}
-	if res.Moved != text.EscapeOnly(res.Moved) || strings.ContainsAny(res.Moved, " \t\r\n") {
+	// Any Unicode space, not only ASCII ones: a no-break or ideographic
+	// space reads as a gap, so the agent could not copy the line back.
+	if res.Moved != text.EscapeOnly(res.Moved) || strings.IndexFunc(res.Moved, unicode.IsSpace) >= 0 {
 		res.Moved = ""
 		return &guard.Refusal{Reason: "the page moved to an address with invisible characters or spaces"}
 	}

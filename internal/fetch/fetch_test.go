@@ -214,6 +214,30 @@ func TestMovedShowsNoInvisibleCharacters(t *testing.T) {
 	}
 }
 
+// A target holding any Unicode space is refused, not only ASCII ones:
+// a no-break space or an ideographic space would read as a gap to the
+// agent, which could then copy the address wrongly or in part.
+func TestMovedRefusesUnicodeSpaces(t *testing.T) {
+	var loc string
+	srv, f := server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", loc)
+		w.WriteHeader(http.StatusFound)
+	}), nil)
+	for _, l := range []string{"/a?q=x\u00a0y", "/a?q=x\u3000y", "/a?q=x\u2003y", "/a?q=x\u0085y"} {
+		loc = l
+		res, err := f.Fetch(context.Background(), srv.URL+"/")
+		refusal(t, err, "spaces")
+		if res.Moved != "" {
+			t.Fatalf("%q: a target with a space was reported: %q", l, res.Moved)
+		}
+	}
+	loc = "/a?q=x%C2%A0y"
+	res, err := f.Fetch(context.Background(), srv.URL+"/")
+	if err != nil || !strings.HasSuffix(res.Moved, "/a?q=x%C2%A0y") {
+		t.Fatalf("an encoded space is part of the address: %v %q", err, res.Moved)
+	}
+}
+
 // The redirect target is not even resolved, so a name that would rebind
 // is never looked up.
 func TestRedirectTargetNotResolved(t *testing.T) {
