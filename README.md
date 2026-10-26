@@ -27,8 +27,10 @@ red-team corpus, which serves attack pages from a local server. This build
 may fetch from one loopback origin, named in the config as
 `"fetch": {"fixture_origin": "127.0.0.1:8123"}`. Only that address and
 port are let through. Every other rule still applies, to the first URL
-and to each redirect, so a redirect from a fixture page into the tailnet
-or a private range is refused as it would be in the release build. A
+and to the target of a redirect, so a redirect from a fixture page into
+the tailnet or a private range is refused as it would be in the release
+build. Nothing follows a redirect, so a target is only judged, never
+requested. A
 host name never reaches the origin, even one that resolves to it.
 
 Its search reads results from a file instead of calling Brave:
@@ -88,7 +90,7 @@ misspelt limit is never quietly the default.
 
 `snapshot_dir` is required and must be absolute. fetch and check keep
 every page they read there. The `fetch` limits apply to both: the time a
-whole fetch may take, redirects and body included (20 seconds by default),
+whole fetch may take, body included (20 seconds by default),
 how much of a body is read (5 MB), how many characters of text the
 agent is shown (20000), how much the snapshot directory may hold (2 GB;
 past that the oldest snapshots are removed), and how much memory the
@@ -124,16 +126,15 @@ request would carry the key to wherever it pointed.
 
 Input: `{"url": "https://..."}`.
 
-The output is a few lines about the fetch, any warnings, a blank line and
-then the page's text:
+fetch follows no redirect. The output for a page is a few lines about the
+fetch, any warnings, a blank line and then the page's text:
 
 ```
-url: http://iana.org/
+url: https://www.iana.org/
 final_url: https://www.iana.org/
 status: 200
 content_type: text/html
 sha256: c26b9fd1a5b06c50d063b5c14ca08fe0a31af7ef8bb7869d8db2ab2ef577b311
-redirects: http://iana.org/ (301) -> https://www.iana.org/
 title: Internet Assigned Numbers Authority
 
 # Internet Assigned Numbers Authority
@@ -142,6 +143,29 @@ The global coordination of the DNS Root, IP addressing, and other Internet
 protocol resources is performed as the Internet Assigned Numbers Authority
 (IANA) functions. Learn more. <https://www.iana.org/about>
 ```
+
+A response with a 3xx status and a `Location` header is a short, successful
+result that says the page moved. The target is resolved against the URL
+that was fetched, so it is always absolute, and it is written exactly as
+it should be fetched, alone on its own line:
+
+```
+url: http://iana.org/
+status: 301
+
+This page has moved. It was not followed. Its new address is:
+
+https://www.iana.org/
+```
+
+The target goes through every rule below, as any URL does, but it is never
+requested, not even resolved. If a rule refuses it, the result is an error
+naming the target and the rule. A target with an invisible character or a
+space that the URL writer would leave raw is refused too, so the line the
+agent sees is the address, byte for byte. No body is read and no snapshot is
+kept for a moved page. Fetching the address is a new call, and relay can
+check it against the URLs it has shown the agent. A 3xx with no `Location`
+is an ordinary page.
 
 A page that is not a 2xx still comes back, with its status, so the agent
 can read a 404 page. Text past `max_text_chars` is cut, with a note saying
@@ -229,8 +253,8 @@ put in front of hostile input.
 Each page read is kept in `snapshot_dir`, named by the SHA-256 of its raw
 body: the body as `<sha256>.body`, the text the agent was shown (up to
 `max_text_chars`) as `<sha256>.txt`, and `<sha256>.json` with the URL, final URL,
-status, content type, fetch time, redirect chain and the counts above, the
-URLs with invisible characters escaped. A body fetched twice is kept once,
+status, content type, fetch time and the counts above, the URLs with
+invisible characters escaped. A body fetched twice is kept once,
 and its JSON describes the latest fetch. When the directory holds more than
 `max_snapshot_bytes`, the oldest snapshots are removed, never the one just
 written. Only files named as snapshots are counted or removed, and a lock
@@ -278,8 +302,8 @@ on the LAN. A global IPv6 address is refused with its whole /56, the
 block a home router is usually delegated and splits among the networks
 in the house. Prefixes delegated beyond that /56 are not known here.
 
-Each redirect is checked like the first URL, at most five are followed,
-and the chain is reported.
+A redirect target is checked like the first URL, and then reported, not
+followed.
 
 Some things this cannot see. Stylesheets and classes are not evaluated,
 so text hidden by a rule in a `<style>` element, or pushed off screen,
@@ -299,9 +323,14 @@ optional, 1 to 5, 3 by default.
 ask searches, then fetches the first `n` result URLs, each once, through
 the same guarded fetcher as fetch. There is no URL argument: the only
 URLs fetched are the ones the search backend returned, so the one thing
-the caller chooses is the query. It asks the backend for twice `n`
+the caller chooses is the query. When a result moved, ask follows the
+redirect only if the target appears, character for character, among the
+URLs the search returned (any of the `2n`, not only the first `n`), and
+stops after five hops. Any other target is not fetched: that page comes
+back as fetch reports a moved page, with the target on its own line. It asks the backend for twice `n`
 results, so a URL that comes twice still leaves `n` pages. Pages are read
-one at a time, so allow `:timeout-seconds` for a search and five fetches.
+one at a time, so allow `:timeout-seconds` for a search and five fetches
+(a followed redirect is one more fetch).
 
 The output numbers the pages from 1 in search order. Each page starts
 with a line holding a random token made for this call, which page text
@@ -361,14 +390,14 @@ string has invisible characters escaped as `\u{XXXX}`.
 
 ```json
 {"items": [{
-  "url": "http://iana.org/help/example-domains",
+  "url": "https://www.iana.org/help/example-domains",
   "fetched": true,
   "complete": true,
   "uncheckable": "",
   "error": "",
   "status": 200,
   "final_url": "https://www.iana.org/help/example-domains",
-  "redirects": [{"url": "http://iana.org/help/example-domains", "status": 301}],
+  "moved_to": "",
   "crosses_domains": false,
   "domain": "iana.org",
   "final_domain": "iana.org",
@@ -383,11 +412,13 @@ string has invisible characters escaped as `\u{XXXX}`.
 }]}
 ```
 
-`crosses_domains` is true when any step from the first URL through the
-redirects to the final URL, or to the redirect target a failed fetch was
-sent to, moves to another registrable domain (the eTLD+1
+check follows no redirect. When a page moved, `moved_to` holds the
+absolute target, `fetched` is false, `error` says the page moved and
+redirects are not followed, and every quote is reported not found. The
+target is never requested. `crosses_domains` is true when `moved_to` is
+on another registrable domain than the URL (the eTLD+1
 by the public suffix list; an IP address is its own domain). `domain` and
-`final_domain` are those of the first and final URLs, in ASCII. For each
+`final_domain` are those of the first and the answering URLs, in ASCII. For each
 host, `punycode` says whether a label starts with `xn--`, `unicode` is how
 the name displays, `scripts` are the scripts of its letters, and
 `mixed_scripts` is true when one label mixes scripts beyond the
